@@ -4,6 +4,11 @@ const { requireAuth } = require('./middleware/auth');
 
 app.use(express.json());
 
+// Serves logo.png, favicon, etc. — anything in /public is reachable at /assets/<filename>,
+// no auth required (a logo isn't sensitive data, and the login screen needs to show it
+// before anyone has a token).
+app.use('/assets', express.static('public'));
+
 // Login is the only unauthenticated endpoint; everything else requires a valid token.
 app.use('/api/auth', require('./routes/auth'));
 
