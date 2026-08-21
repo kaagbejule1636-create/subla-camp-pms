@@ -5,17 +5,19 @@ require('dotenv').config();
 const pool = require('./pool');
 
 const ROOM_TYPES = [
-  { name: 'Standard Tent', base_rate: 350, max_adults: 2, max_children: 1 },
-  { name: 'Deluxe Tent', base_rate: 480, max_adults: 2, max_children: 2 },
-  { name: 'Family Tent', base_rate: 650, max_adults: 4, max_children: 2 },
+  { name: 'Camping Tents', base_rate: 500, max_adults: 2, max_children: 1 },
+  { name: 'Deluxe Rooms', base_rate: 2500, max_adults: 2, max_children: 2 },
+  { name: 'Caravan Parking', base_rate: 1000, max_adults: 2, max_children: 1 },
 ];
 
 // room_number, room_type name (must match one of the names above)
 const ROOMS = [
-  ['S-01', 'Standard Tent'], ['S-02', 'Standard Tent'], ['S-03', 'Standard Tent'],
-  ['D-04', 'Deluxe Tent'], ['D-06', 'Deluxe Tent'], ['D-07', 'Deluxe Tent'],
-  ['D-09', 'Deluxe Tent'], ['D-11', 'Deluxe Tent'], ['D-12', 'Deluxe Tent'],
-  ['F-15', 'Family Tent'], ['F-16', 'Family Tent'],
+  ['Unit 1', 'Camping Tents'], ['Unit 2', 'Camping Tents'], ['Unit 3', 'Camping Tents'],
+  ['Unit 4', 'Camping Tents'], ['Unit 5', 'Camping Tents'],
+  ['Unit 6', 'Deluxe Rooms'], ['Unit 7', 'Deluxe Rooms'], ['Unit 8', 'Deluxe Rooms'],
+  ['Unit 9', 'Deluxe Rooms'], ['Unit 10', 'Deluxe Rooms'],
+  ['Unit 11', 'Caravan Parking'], ['Unit 12', 'Caravan Parking'], ['Unit 13', 'Caravan Parking'],
+  ['Unit 14', 'Caravan Parking'], ['Unit 15', 'Caravan Parking'],
 ];
 
 async function seed() {
