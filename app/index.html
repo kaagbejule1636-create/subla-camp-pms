@@ -212,8 +212,62 @@
   }
   .error-box{ color:var(--red); }
 
+  .room-tag{ cursor:pointer; transition:box-shadow 0.1s; }
+  .room-tag:hover{ box-shadow:0 0 0 2px var(--pine); }
+  .room-tag.dirty{ cursor:not-allowed; }
+  .room-tag.dirty:hover{ box-shadow:0 0 0 2px var(--red); }
+
+  /* ---------- Modal ---------- */
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(27,36,32,0.5);
+    display:flex; align-items:center; justify-content:center;
+    padding:20px; z-index:100;
+  }
+  .modal{
+    background:var(--panel);
+    border-radius:14px;
+    padding:28px;
+    width:100%;
+    max-width:520px;
+    max-height:90vh;
+    overflow-y:auto;
+    box-shadow:0 8px 30px rgba(0,0,0,0.15);
+  }
+  .modal-head{
+    display:flex; align-items:flex-start; justify-content:space-between;
+    margin-bottom:18px;
+  }
+  .modal-head h2{
+    font-family:'Fraunces',serif; font-weight:500; font-size:20px; margin:0 0 4px;
+  }
+  .modal-head p{ margin:0; font-size:13px; color:var(--ink-soft); }
+  .modal-close{
+    background:none; border:none; font-size:20px; color:var(--ink-soft);
+    cursor:pointer; line-height:1; padding:4px;
+  }
+  .field-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .modal-actions{
+    display:flex; justify-content:space-between; align-items:center;
+    margin-top:22px; gap:12px;
+  }
+  .modal-error{
+    background:var(--red-soft); color:var(--red); border-radius:7px;
+    padding:10px 12px; font-size:13px; margin-bottom:14px;
+  }
+  .modal-status{
+    font-size:13px; color:var(--ink-soft); margin-bottom:14px;
+  }
+  .folio-line{
+    display:flex; justify-content:space-between; padding:6px 0;
+    font-size:13px; border-bottom:1px solid var(--line);
+  }
+  .folio-line.total{ font-weight:600; font-size:14px; border-bottom:none; padding-top:10px; }
+  .balance-zero{ color:var(--moss); }
+  .balance-due{ color:var(--red); }
+
   @media (max-width: 700px){
     .stat-grid{ grid-template-columns:repeat(2, 1fr); }
+    .field-row{ grid-template-columns:1fr; }
   }
 </style>
 </head>
@@ -290,6 +344,9 @@
       </div>
     </div>
   </div>
+
+  <!-- ============ MODAL (check-in / check-out) ============ -->
+  <div id="modal-backdrop" class="modal-backdrop hidden"></div>
 
 <script>
   // -------- Config --------
@@ -423,6 +480,17 @@
             <div class="room-status">${statusText}</div>
             <div class="room-rate">AED ${Number(room.base_rate).toFixed(0)}/night</div>
           `;
+          tile.addEventListener('click', () => {
+            if (isDirty) {
+              alert('This room needs to be cleaned before a new guest can be checked in.');
+              return;
+            }
+            if (isOccupied) {
+              openCheckoutModal(room);
+            } else {
+              openCheckinModal(room);
+            }
+          });
           grid.appendChild(tile);
         });
 
@@ -439,6 +507,281 @@
     const div = document.createElement('div');
     div.textContent = str == null ? '' : String(str);
     return div.innerHTML;
+  }
+
+  // -------- Modal helpers --------
+  const modalBackdrop = document.getElementById('modal-backdrop');
+
+  function closeModal() {
+    modalBackdrop.classList.add('hidden');
+    modalBackdrop.innerHTML = '';
+  }
+  function openModal(html) {
+    modalBackdrop.innerHTML = `<div class="modal">${html}</div>`;
+    modalBackdrop.classList.remove('hidden');
+    // Clicking the dark backdrop (not the modal card itself) closes it.
+    modalBackdrop.onclick = (e) => { if (e.target === modalBackdrop) closeModal(); };
+  }
+  function todayISO() { return new Date().toISOString().slice(0, 10); }
+  function addDaysISO(dateStr, days) {
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  // -------- Check-in flow: create a reservation, assign this room, take a deposit, confirm --------
+  function openCheckinModal(room) {
+    const defaultCheckIn = todayISO();
+    const defaultCheckOut = addDaysISO(defaultCheckIn, 1);
+
+    openModal(`
+      <div class="modal-head">
+        <div>
+          <h2>New Check-In — ${escapeHtml(room.room_number)}</h2>
+          <p>${escapeHtml(room.room_type)} · AED ${Number(room.base_rate).toFixed(0)}/night</p>
+        </div>
+        <button class="modal-close" id="ci-close">&times;</button>
+      </div>
+      <div id="ci-error" class="modal-error hidden"></div>
+      <div id="ci-status" class="modal-status hidden"></div>
+      <form id="ci-form">
+        <div class="field required">
+          <label>Guest full name</label>
+          <input type="text" id="ci-name" required>
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="text" id="ci-phone" placeholder="+971...">
+        </div>
+        <div class="field-row">
+          <div class="field required">
+            <label>Check-in date</label>
+            <input type="date" id="ci-checkin" value="${defaultCheckIn}" required>
+          </div>
+          <div class="field required">
+            <label>Check-out date</label>
+            <input type="date" id="ci-checkout" value="${defaultCheckOut}" required>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Adults</label>
+            <input type="number" id="ci-adults" value="2" min="1">
+          </div>
+          <div class="field">
+            <label>Children</label>
+            <input type="number" id="ci-children" value="0" min="0">
+          </div>
+        </div>
+        <div class="field required">
+          <label>Rate per night (AED)</label>
+          <input type="number" id="ci-rate" value="${Number(room.base_rate)}" min="0" step="0.01" required>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Deposit collected (AED)</label>
+            <input type="number" id="ci-deposit" value="0" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label>Payment method</label>
+            <select id="ci-payment-method">
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank transfer</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="ci-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="ci-submit">Check In Guest</button>
+        </div>
+      </form>
+    `);
+
+    document.getElementById('ci-close').addEventListener('click', closeModal);
+    document.getElementById('ci-cancel').addEventListener('click', closeModal);
+    document.getElementById('ci-form').addEventListener('submit', (e) => handleCheckinSubmit(e, room));
+  }
+
+  async function handleCheckinSubmit(e, room) {
+    e.preventDefault();
+    const errorBox = document.getElementById('ci-error');
+    const statusBox = document.getElementById('ci-status');
+    const submitBtn = document.getElementById('ci-submit');
+    errorBox.classList.add('hidden');
+
+    const guest = {
+      full_name: document.getElementById('ci-name').value.trim(),
+      phone: document.getElementById('ci-phone').value.trim() || undefined,
+    };
+    const check_in_date = document.getElementById('ci-checkin').value;
+    const check_out_date = document.getElementById('ci-checkout').value;
+    const adults = Number(document.getElementById('ci-adults').value) || 1;
+    const children = Number(document.getElementById('ci-children').value) || 0;
+    const rate_per_night = Number(document.getElementById('ci-rate').value);
+    const deposit = Number(document.getElementById('ci-deposit').value) || 0;
+    const payment_method = document.getElementById('ci-payment-method').value;
+
+    if (!guest.full_name) {
+      errorBox.textContent = 'Guest name is required.';
+      errorBox.classList.remove('hidden');
+      return;
+    }
+    if (check_out_date <= check_in_date) {
+      errorBox.textContent = 'Check-out date must be after check-in date.';
+      errorBox.classList.remove('hidden');
+      return;
+    }
+
+    submitBtn.disabled = true;
+    statusBox.classList.remove('hidden');
+
+    // Each step is a separate API call. If one fails partway through, we stop immediately
+    // and say exactly what succeeded and what didn't — the reservation may already exist
+    // at that point, so blindly retrying the whole sequence could create a duplicate.
+    let reservation;
+    try {
+      statusBox.textContent = 'Creating reservation…';
+      reservation = await apiFetch('/api/reservations', {
+        method: 'POST',
+        body: JSON.stringify({
+          guest, room_type_id: room.room_type_id, check_in_date, check_out_date,
+          adults, children, rate_per_night, source: 'direct',
+        }),
+      });
+
+      statusBox.textContent = `Reservation ${reservation.reservation_code} created. Assigning room…`;
+      await apiFetch(`/api/reservations/${reservation.id}/assign-room`, {
+        method: 'PATCH',
+        body: JSON.stringify({ room_id: room.id }),
+      });
+
+      if (deposit > 0) {
+        statusBox.textContent = 'Recording deposit…';
+        await apiFetch(`/api/checkin/${reservation.id}/payment`, {
+          method: 'POST',
+          body: JSON.stringify({ amount: deposit, payment_method, type: 'deposit' }),
+        });
+      }
+
+      statusBox.textContent = 'Confirming check-in…';
+      await apiFetch(`/api/checkin/${reservation.id}/confirm`, { method: 'POST' });
+
+      statusBox.textContent = 'Done.';
+      closeModal();
+      loadDashboard();
+    } catch (err) {
+      submitBtn.disabled = false;
+      statusBox.classList.add('hidden');
+      const partial = reservation
+        ? ` Reservation ${reservation.reservation_code} was created — check the dashboard before retrying, to avoid creating a duplicate.`
+        : '';
+      errorBox.textContent = (err.message || 'Check-in failed.') + partial;
+      errorBox.classList.remove('hidden');
+    }
+  }
+
+  // -------- Check-out flow: look up the active reservation, show the folio, settle + confirm --------
+  async function openCheckoutModal(room) {
+    openModal(`
+      <div class="modal-head">
+        <div><h2>Check-Out — ${escapeHtml(room.room_number)}</h2></div>
+        <button class="modal-close" id="co-close">&times;</button>
+      </div>
+      <div id="co-body" class="loading">Loading guest folio…</div>
+    `);
+    document.getElementById('co-close').addEventListener('click', closeModal);
+
+    try {
+      const reservation = await apiFetch(`/api/reservations/by-room/${room.id}`);
+      const folio = await apiFetch(`/api/checkout/${reservation.id}/folio`);
+      renderCheckoutBody(reservation, folio);
+    } catch (err) {
+      document.getElementById('co-body').innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load folio.')}</div>`;
+    }
+  }
+
+  function renderCheckoutBody(reservation, folio) {
+    const balanceDue = Number(folio.balance_due);
+    const isSettled = balanceDue <= 0;
+
+    document.getElementById('co-body').innerHTML = `
+      <p style="margin:0 0 4px;"><b>${escapeHtml(reservation.full_name)}</b></p>
+      <p style="margin:0 0 16px; color:var(--ink-soft); font-size:13px;">Reservation ${escapeHtml(reservation.reservation_code)}</p>
+
+      <div class="folio-line"><span>Total charges</span><span>AED ${Number(folio.total_charges).toFixed(2)}</span></div>
+      <div class="folio-line"><span>Total paid</span><span>AED ${Number(folio.total_credits).toFixed(2)}</span></div>
+      <div class="folio-line total ${isSettled ? 'balance-zero' : 'balance-due'}">
+        <span>Balance due</span><span>AED ${balanceDue.toFixed(2)}</span>
+      </div>
+
+      <div id="co-error" class="modal-error hidden" style="margin-top:14px;"></div>
+      <div id="co-status" class="modal-status hidden"></div>
+
+      ${isSettled ? `
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="co-cancel">Cancel</button>
+          <button class="btn btn-primary" id="co-confirm">Check Out Guest</button>
+        </div>
+      ` : `
+        <p style="font-size:13px; color:var(--ink-soft); margin:16px 0 8px;">Settle the balance before checking out.</p>
+        <div class="field-row">
+          <div class="field">
+            <label>Amount (AED)</label>
+            <input type="number" id="co-amount" value="${balanceDue.toFixed(2)}" min="0.01" step="0.01">
+          </div>
+          <div class="field">
+            <label>Payment method</label>
+            <select id="co-payment-method">
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank transfer</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="co-cancel">Cancel</button>
+          <button class="btn btn-primary" id="co-confirm">Settle &amp; Check Out</button>
+        </div>
+      `}
+    `;
+
+    document.getElementById('co-cancel').addEventListener('click', closeModal);
+    document.getElementById('co-confirm').addEventListener('click', () => handleCheckoutConfirm(reservation, isSettled));
+  }
+
+  async function handleCheckoutConfirm(reservation, isSettled) {
+    const errorBox = document.getElementById('co-error');
+    const statusBox = document.getElementById('co-status');
+    const confirmBtn = document.getElementById('co-confirm');
+    errorBox.classList.add('hidden');
+    confirmBtn.disabled = true;
+    statusBox.classList.remove('hidden');
+
+    try {
+      if (!isSettled) {
+        const amount = Number(document.getElementById('co-amount').value);
+        const payment_method = document.getElementById('co-payment-method').value;
+        if (!amount || amount <= 0) throw new Error('Enter a valid settlement amount.');
+
+        statusBox.textContent = 'Recording payment…';
+        await apiFetch(`/api/checkout/${reservation.id}/settle`, {
+          method: 'POST',
+          body: JSON.stringify({ amount, payment_method }),
+        });
+      }
+
+      statusBox.textContent = 'Confirming check-out…';
+      await apiFetch(`/api/checkout/${reservation.id}/confirm`, { method: 'POST' });
+
+      closeModal();
+      loadDashboard();
+    } catch (err) {
+      confirmBtn.disabled = false;
+      statusBox.classList.add('hidden');
+      errorBox.textContent = err.message || 'Check-out failed.';
+      errorBox.classList.remove('hidden');
+    }
   }
 
   // -------- On page load, resume session if we have one --------

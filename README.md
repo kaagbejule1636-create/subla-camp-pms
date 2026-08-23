@@ -47,6 +47,7 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Deposit / Payment    | `GET /api/checkin/:reservationId/folio` then `POST /api/checkin/:reservationId/payment` |
 | Confirm Check-In     | `POST /api/checkin/:reservationId/confirm` — flips reservation → `checked_in` and room → `occupied` in one transaction, and posts the room charge to the folio |
 | Front-desk dashboard | `GET /api/reservations/dashboard` |
+| Find the active reservation for a room | `GET /api/reservations/by-room/:roomId` — built for the frontend's checkout flow |
 | Housekeeping status  | `PATCH /api/rooms/:id/housekeeping` |
 | Check-out: review folio | `GET /api/checkout/:reservationId/folio` |
 | Add a charge mid-stay | `POST /api/reservations/:id/charges` — for anything during a stay (damage fee, extra service, airport transfer), not just at checkout |
@@ -117,13 +118,14 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 - **Check-in/check-out times are 12:00 PM / 2:00 PM**, set explicitly on request. Worth knowing operationally: this means a departing guest has until 2:00 PM the same day an arriving guest can check in from noon — a 2-hour window where both could technically be active in the system before housekeeping turns the room over. Flagging this because it's a real scheduling consideration, not because the system enforces anything different from what was asked.
 - **Inventory scope is guest-facing supplies only** (minibar, linens, amenities) — tracked per room against a central/warehouse stock count. Consuming an item with a `guest_price` set automatically posts a charge to the guest's folio if a `reservation_id` is passed, the same pattern as room charges. Back-of-house operational stock (cleaning supplies, F&B ingredients) isn't covered — would need a separate table if you want that tracked too, since mixing "things a guest can be billed for" with "things that are pure operating cost" under one model gets confusing fast.
 - **Expenses are a flat ledger, not double-entry accounting.** Record → list → summary by category and date range. Deliberately append-only, same philosophy as the folio — no edit or delete endpoint exists yet, so a mistaken entry needs a correcting entry, not an edit. Recording and listing are supervisor+; the summary report is manager-only, matching the same gating already used for revenue/occupancy reports.
+- **The check-in flow on the room grid is a real sequence, not one API call** — creating the reservation, assigning the room, recording a deposit, and confirming check-in are four separate requests. If one fails partway through (e.g. the network drops after the reservation's created but before the room's assigned), the UI stops immediately, tells you exactly what happened, and includes the reservation code so you can find and finish it from the dashboard rather than risk creating a duplicate by blindly retrying. Tested this whole flow, plus the checkout flow and the dirty-room block, end-to-end with a real headless browser against a mock API matching the live routes' shapes — not just by reading the code — but it's still a simulation, not the live database, so a first real run against production is worth watching closely.
 
 ## Not yet built (next phases)
 
 - A signup/onboarding flow for the first user (currently seeded directly via `psql`, see Setup above)
 - A printable night audit report (same style as the housekeeping report) — the night audit API itself (`preview`/`close`/`history`) already exists and works
 - Back-of-house/operational inventory (cleaning supplies, F&B) — see the inventory design note above
-- The web frontend only covers login + dashboard so far — check-in, check-out, and the new printable documents all still require calling the API directly (or opening the PDF URLs in a browser); no buttons for them exist in the UI yet
+- The web frontend now covers login, dashboard, and the core check-in/check-out flow — clicking a vacant room starts a new booking and check-in, clicking an occupied room opens the folio and check-out. Still missing from the UI: the printable documents (invoice, registration card, gate pass, housekeeping report — all work, just not linked from a button anywhere), inventory, expenses, and reports/night audit
 
 ## Worth knowing before you scale this
 

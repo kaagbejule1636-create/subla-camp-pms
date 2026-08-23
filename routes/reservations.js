@@ -199,4 +199,26 @@ router.post('/:id/charges', async (req, res) => {
   }
 });
 
+// GET /api/reservations/by-room/:roomId — finds the currently checked-in reservation for a
+// room, if any. Built for the frontend room grid: clicking an occupied tile needs to know
+// which reservation to show for checkout, and there was previously no way to look that up
+// except by already knowing the reservation code or guest name.
+router.get('/by-room/:roomId', async (req, res) => {
+  const { roomId } = req.params;
+  try {
+    const { rows } = await pool.query(
+      `SELECT res.*, g.full_name, g.phone
+       FROM reservations res JOIN guests g ON g.id = res.guest_id
+       WHERE res.room_id = $1 AND res.status = 'checked_in'
+       ORDER BY res.checked_in_at DESC LIMIT 1`,
+      [roomId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'No active reservation for this room' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to look up reservation for room' });
+  }
+});
+
 module.exports = router;
