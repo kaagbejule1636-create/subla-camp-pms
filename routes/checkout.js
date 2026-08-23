@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const PDFDocument = require('pdfkit');
 const { resolvePaymentAmount } = require('../services/currency');
+const { drawLetterhead } = require('../services/pdf-letterhead');
 
 // GET /api/checkout/:reservationId/folio — full bill for review before checkout.
 // Same shape as the check-in folio endpoint (room charges + extras vs payments/deposits/discounts).
@@ -182,6 +184,68 @@ router.post('/:reservationId/confirm', async (req, res) => {
     res.status(500).json({ error: 'Failed to complete check-out' });
   } finally {
     client.release();
+  }
+});
+
+// GET /api/checkout/:reservationId/gate-pass — a short printable departure confirmation,
+// distinct from the full itemized invoice (see routes/invoices.js). Meant to be handed to
+// the guest or shown at the gate as proof of a completed, settled checkout — not a bill.
+// Only makes sense for reservations that have actually been checked out.
+router.get('/:reservationId/gate-pass', async (req, res) => {
+  const { reservationId } = req.params;
+  try {
+    const { rows } = await pool.query(
+      `SELECT res.*, rt.name AS room_type, rm.room_number, g.full_name
+       FROM reservations res
+       JOIN room_types rt ON rt.id = res.room_type_id
+       JOIN guests g ON g.id = res.guest_id
+       LEFT JOIN rooms rm ON rm.id = res.room_id
+       WHERE res.id = $1`,
+      [reservationId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Reservation not found' });
+    const r = rows[0];
+
+    if (r.status !== 'checked_out') {
+      return res.status(409).json({ error: `Reservation is '${r.status}' — a gate pass can only be printed after checkout is confirmed` });
+    }
+
+    const doc = new PDFDocument({ margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=gate-pass-${r.reservation_code}.pdf`);
+    doc.pipe(res);
+
+    drawLetterhead(doc, 'Departure Confirmation');
+
+    doc.fontSize(11);
+    doc.text(`Reservation: ${r.reservation_code}`);
+    doc.moveDown();
+
+    doc.fontSize(12).text('Guest', { underline: true });
+    doc.fontSize(11).text(r.full_name);
+    doc.moveDown();
+
+    doc.fontSize(12).text('Stay', { underline: true });
+    doc.fontSize(11);
+    doc.text(`Room: ${r.room_number || 'N/A'} (${r.room_type})`);
+    doc.text(`Check-in: ${new Date(r.check_in_date).toLocaleDateString()}`);
+    doc.text(`Check-out: ${new Date(r.check_out_date).toLocaleDateString()}`);
+    doc.moveDown();
+
+    doc.fontSize(11).fillColor('#2F4B3C').text('Status: Checked out — account settled in full', { underline: false });
+    doc.fillColor('#000');
+    if (r.checked_out_at) {
+      doc.fontSize(10).fillColor('#555').text(`Departed: ${new Date(r.checked_out_at).toLocaleString()}`);
+    }
+    doc.fillColor('#000');
+    doc.moveDown(2);
+
+    doc.fontSize(9).fillColor('#777').text('This confirms the guest has completed check-out with no outstanding balance.', { align: 'center' });
+
+    doc.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate gate pass' });
   }
 });
 

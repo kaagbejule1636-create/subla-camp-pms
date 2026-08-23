@@ -31,9 +31,9 @@ router.post('/:reservationId/issue', async (req, res) => {
     // Key validity always matches the actual stay dates, per the eZee behavior —
     // never longer than the booking, regardless of what's requested.
     const validFrom = new Date(reservation.check_in_date);
-    validFrom.setHours(14, 0, 0, 0); // standard 2pm check-in time; adjust to your property's policy
+    validFrom.setHours(12, 0, 0, 0); // property check-in time: 12:00 PM (noon)
     const validUntil = new Date(reservation.check_out_date);
-    validUntil.setHours(12, 0, 0, 0); // standard noon check-out time
+    validUntil.setHours(14, 0, 0, 0); // property check-out time: 2:00 PM
 
     const { rows } = await pool.query(
       `INSERT INTO electronic_keys (reservation_id, room_id, key_code, valid_from, valid_until, issued_by)

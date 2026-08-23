@@ -3,6 +3,7 @@ const router = express.Router();
 const PDFDocument = require('pdfkit');
 const pool = require('../db/pool');
 const { sendWhatsAppMessage } = require('../services/whatsapp');
+const { drawLetterhead, drawTermsAndConditions } = require('../services/pdf-letterhead');
 
 // GET /api/invoices/:reservationId — streams a PDF invoice built from the reservation's folio.
 // Works for any reservation status, but is intended to be called right after checkout.
@@ -39,11 +40,9 @@ router.get('/:reservationId', async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename=invoice-${r.reservation_code}.pdf`);
     doc.pipe(res);
 
-    doc.fontSize(20).text('Subla Camp', { continued: false });
-    doc.fontSize(10).fillColor('#555').text('Guest Invoice');
-    doc.moveDown(1.5);
+    drawLetterhead(doc, 'Guest Invoice');
 
-    doc.fillColor('#000').fontSize(11);
+    doc.fontSize(11);
     doc.text(`Invoice for reservation ${r.reservation_code}`);
     doc.text(`Issued: ${new Date().toLocaleDateString()}`);
     doc.moveDown();
@@ -87,6 +86,8 @@ router.get('/:reservationId', async (req, res) => {
 
     doc.moveDown(2);
     doc.fontSize(9).fillColor('#777').text('Thank you for staying with Subla Camp.', { align: 'center' });
+
+    drawTermsAndConditions(doc);
 
     doc.end();
   } catch (err) {

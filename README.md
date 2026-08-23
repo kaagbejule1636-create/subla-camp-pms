@@ -49,11 +49,15 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Front-desk dashboard | `GET /api/reservations/dashboard` |
 | Housekeeping status  | `PATCH /api/rooms/:id/housekeeping` |
 | Check-out: review folio | `GET /api/checkout/:reservationId/folio` |
+| Add a charge mid-stay | `POST /api/reservations/:id/charges` — for anything during a stay (damage fee, extra service, airport transfer), not just at checkout |
 | Check-out: add last-minute charge | `POST /api/checkout/:reservationId/charge` |
 | Check-out: settle balance | `POST /api/checkout/:reservationId/settle` |
 | Check-out: confirm | `POST /api/checkout/:reservationId/confirm` — flips reservation → `checked_out`, room → `vacant` + `dirty` |
-| Print / view invoice | `GET /api/invoices/:reservationId` — streams a PDF built from folio data |
+| Print / view invoice | `GET /api/invoices/:reservationId` — streams a PDF built from folio data; now includes the property logo, address, and terms & conditions |
 | Send invoice via WhatsApp | `POST /api/invoices/:reservationId/send-whatsapp` |
+| Print guest registration card | `GET /api/checkin/:reservationId/registration-card` — printable check-in document with guest/stay details and a signature line, plus terms & conditions |
+| Print departure confirmation / gate pass | `GET /api/checkout/:reservationId/gate-pass` — short printable confirmation that a checkout is complete and settled (only works once `status` is `checked_out`) |
+| Print housekeeping report | `GET /api/housekeeping/report` — printable room status board + open task list, for a shift handover or morning walkthrough |
 | Housekeeping: task board | `GET /api/housekeeping/tasks` |
 | Housekeeping: create/assign task | `POST /api/housekeeping/tasks`, `PATCH /api/housekeeping/tasks/:id/assign` |
 | Housekeeping: update task status | `PATCH /api/housekeeping/tasks/:id/status` — marking a `clean_room` task `done` auto-clears the room's dirty flag |
@@ -73,6 +77,14 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Internal message (Reception → Housekeeping/Maintenance) | `POST /api/internal-messages`, `GET /api/internal-messages?to_dept=` |
 | Issue a pay-out voucher | `POST /api/payouts` — posts to the guest's folio so it shows up on their bill and in cashier-shift reports |
 | Manage currencies | `GET/POST /api/currencies` (supervisor+ to add/update rates) |
+| Inventory: item types | `GET /api/inventory/items`, `POST /api/inventory/items` (supervisor+) |
+| Inventory: low stock alert | `GET /api/inventory/low-stock` — central stock at or below reorder threshold |
+| Inventory: room stock | `GET /api/inventory/rooms/:roomId` |
+| Inventory: restock a room | `POST /api/inventory/rooms/:roomId/restock` — draws down central stock |
+| Inventory: guest consumption | `POST /api/inventory/rooms/:roomId/consume` — if the item has a `guest_price` and a `reservation_id` is given, auto-posts an `extra_charge` to that guest's folio |
+| Expenses: record | `POST /api/expenses` (supervisor+) |
+| Expenses: list | `GET /api/expenses?category=&start=&end=` (supervisor+) |
+| Expenses: summary | `GET /api/expenses/summary?start=&end=` (manager only — same gating as reports.js) |
 | Pay in a foreign currency | Pass `currency` (and the amount in that currency) to `POST /api/checkin/:id/payment` or `POST /api/checkout/:id/settle` — converted to AED automatically using the configured rate |
 | Ingest an OTA booking | `POST /api/ota/bookings` (webhook, secured by `OTA_WEBHOOK_SECRET`, not staff auth) — idempotent per `(channel, external_booking_id)`; on success, alerts staff via an internal message + optional WhatsApp ping (see below) |
 | OTA availability feed | `GET /api/ota/availability?room_type_id=&start=&end=` — what a channel manager would poll |
@@ -100,10 +112,18 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 - **Rate plans** resolve per-night, not per-stay — a 3-night booking spanning a weekend and a weekday season both gets each night priced correctly rather than one flat rate for the whole stay. Overlapping plans are broken by `priority` (highest wins), then by rate. Call `/quote` before `POST /api/reservations` to get the right `rate_per_night` — though note reservations currently store a single flat `rate_per_night`, so for stays crossing multiple rate tiers you'd want to either average it or extend reservations to store the nightly breakdown (flagging this as a known simplification, same spirit as the night-audit note above).
 - **Auth replaced free-text attribution.** Every place that used to accept `recorded_by`/`changed_by`/`created_by`/`closed_by` from the request body now takes it from the verified token (`req.user.username`) instead — so the cashier-shift report and audit trail can actually be trusted. The one exception is `assigned_to` in housekeeping, which is legitimately something a supervisor sets to someone *else* when assigning a task.
 - **WhatsApp over email** for invoice delivery — deliberately reused your existing Twilio WhatsApp setup from Subla Tea rather than standing up a new email service, since you're already paying for and operating that infrastructure. The `send-whatsapp` route fails with a clear error (not a silent no-op) if the Twilio env vars aren't set — tested that path directly.
+- **Printable PDF documents** (invoice, registration card, gate pass, housekeeping report) all share `services/pdf-letterhead.js` for the logo/address/terms-and-conditions block, so branding stays consistent and only needs updating in one place. Worth knowing: PDFKit's `text(str, x, y)` calls with explicit coordinates (used for the multi-column tables and signature lines) don't reset the cursor for whatever's written next — I hit this exact bug twice while building these documents (things silently rendering on the wrong line or overlapping) and only caught it by actually rendering test PDFs and looking at them, not by reading the code. Any future column-based layout added to these files needs `doc.x` reset back to the left margin explicitly afterward, or the next section can land in the wrong place.
+- **Terms & conditions text is a placeholder** — I drafted standard hotel policy language (check-in/out times, cancellation, damages, rate changes, right to refuse service) since you asked for a draft rather than supplying exact wording. It's not legal advice — worth having it reviewed before relying on it for anything contractual. Edit the `TERMS_AND_CONDITIONS` array in `services/pdf-letterhead.js` to change it.
+- **Check-in/check-out times are 12:00 PM / 2:00 PM**, set explicitly on request. Worth knowing operationally: this means a departing guest has until 2:00 PM the same day an arriving guest can check in from noon — a 2-hour window where both could technically be active in the system before housekeeping turns the room over. Flagging this because it's a real scheduling consideration, not because the system enforces anything different from what was asked.
+- **Inventory scope is guest-facing supplies only** (minibar, linens, amenities) — tracked per room against a central/warehouse stock count. Consuming an item with a `guest_price` set automatically posts a charge to the guest's folio if a `reservation_id` is passed, the same pattern as room charges. Back-of-house operational stock (cleaning supplies, F&B ingredients) isn't covered — would need a separate table if you want that tracked too, since mixing "things a guest can be billed for" with "things that are pure operating cost" under one model gets confusing fast.
+- **Expenses are a flat ledger, not double-entry accounting.** Record → list → summary by category and date range. Deliberately append-only, same philosophy as the folio — no edit or delete endpoint exists yet, so a mistaken entry needs a correcting entry, not an edit. Recording and listing are supervisor+; the summary report is manager-only, matching the same gating already used for revenue/occupancy reports.
 
 ## Not yet built (next phases)
 
 - A signup/onboarding flow for the first user (currently seeded directly via `psql`, see Setup above)
+- A printable night audit report (same style as the housekeeping report) — the night audit API itself (`preview`/`close`/`history`) already exists and works
+- Back-of-house/operational inventory (cleaning supplies, F&B) — see the inventory design note above
+- The web frontend only covers login + dashboard so far — check-in, check-out, and the new printable documents all still require calling the API directly (or opening the PDF URLs in a browser); no buttons for them exist in the UI yet
 
 ## Worth knowing before you scale this
 

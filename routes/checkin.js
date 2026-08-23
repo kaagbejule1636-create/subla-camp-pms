@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const PDFDocument = require('pdfkit');
 const { resolvePaymentAmount } = require('../services/currency');
+const { drawLetterhead, drawTermsAndConditions } = require('../services/pdf-letterhead');
 
 // GET /api/checkin/:reservationId/folio — charge summary shown on the Deposit/Payment and Confirm steps
 router.get('/:reservationId/folio', async (req, res) => {
@@ -159,6 +161,85 @@ router.post('/:reservationId/confirm', async (req, res) => {
     res.status(500).json({ error: 'Failed to complete check-in' });
   } finally {
     client.release();
+  }
+});
+
+// GET /api/checkin/:reservationId/registration-card — printable guest registration card.
+// Intended to be printed at the front desk during check-in for the guest to sign; works
+// for any reservation that has a room assigned, regardless of exact status, so it can be
+// printed just before or just after confirming check-in.
+router.get('/:reservationId/registration-card', async (req, res) => {
+  const { reservationId } = req.params;
+  try {
+    const { rows } = await pool.query(
+      `SELECT res.*, rt.name AS room_type, rm.room_number, g.full_name, g.phone, g.email,
+              g.nationality, g.id_type, g.id_number
+       FROM reservations res
+       JOIN room_types rt ON rt.id = res.room_type_id
+       JOIN guests g ON g.id = res.guest_id
+       LEFT JOIN rooms rm ON rm.id = res.room_id
+       WHERE res.id = $1`,
+      [reservationId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Reservation not found' });
+    const r = rows[0];
+
+    const doc = new PDFDocument({ margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=registration-${r.reservation_code}.pdf`);
+    doc.pipe(res);
+
+    drawLetterhead(doc, 'Guest Registration Card');
+
+    doc.fontSize(11);
+    doc.text(`Reservation: ${r.reservation_code}`);
+    doc.text(`Printed: ${new Date().toLocaleString()}`);
+    doc.moveDown();
+
+    doc.fontSize(12).text('Guest Details', { underline: true });
+    doc.fontSize(11);
+    doc.text(`Name: ${r.full_name}`);
+    if (r.phone) doc.text(`Phone: ${r.phone}`);
+    if (r.email) doc.text(`Email: ${r.email}`);
+    if (r.nationality) doc.text(`Nationality: ${r.nationality}`);
+    if (r.id_type || r.id_number) doc.text(`ID: ${r.id_type || ''} ${r.id_number || ''}`.trim());
+    doc.moveDown();
+
+    doc.fontSize(12).text('Stay Details', { underline: true });
+    doc.fontSize(11);
+    doc.text(`Room: ${r.room_number || 'Not yet assigned'} (${r.room_type})`);
+    doc.text(`Check-in: ${new Date(r.check_in_date).toLocaleDateString()}`);
+    doc.text(`Check-out: ${new Date(r.check_out_date).toLocaleDateString()}`);
+    doc.text(`Adults: ${r.adults}   Children: ${r.children}`);
+    doc.text(`Rate: AED ${Number(r.rate_per_night).toFixed(2)}/night`);
+    if (r.special_requests) doc.text(`Special requests: ${r.special_requests}`);
+    doc.moveDown(2);
+
+    doc.fontSize(9).fillColor('#555').text(
+      'By signing below, I confirm the details above are correct and agree to the terms and conditions of my stay.'
+    );
+    doc.moveDown(2.5);
+    const sigY = doc.y;
+    doc.moveTo(50, sigY).lineTo(250, sigY).stroke();
+    doc.moveTo(300, sigY).lineTo(500, sigY).stroke();
+    doc.fontSize(9).text('Guest signature', 50, sigY + 4);
+    doc.text(`Staff signature${req.user?.full_name ? ` — ${req.user.full_name}` : ''}`, 300, sigY + 4);
+
+    const dateY = sigY + 40;
+    doc.moveTo(50, dateY).lineTo(250, dateY).stroke();
+    doc.text('Date', 50, dateY + 4);
+
+    // Explicit-coordinate text() calls above don't reset the cursor for what follows,
+    // so the next section has to be positioned explicitly back at the left margin.
+    doc.x = 50;
+    doc.y = dateY + 24;
+
+    drawTermsAndConditions(doc);
+
+    doc.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate registration card' });
   }
 });
 

@@ -9,6 +9,12 @@ app.use(express.json());
 // before anyone has a token).
 app.use('/assets', express.static('public'));
 
+// Serves the front-desk web app (login screen + dashboard) at the site root.
+// express.static automatically serves app/index.html when someone visits "/".
+// No auth gate here — the page itself handles login and only calls authenticated
+// API routes once a token exists.
+app.use(express.static('app'));
+
 // Login is the only unauthenticated endpoint; everything else requires a valid token.
 app.use('/api/auth', require('./routes/auth'));
 
@@ -26,6 +32,8 @@ app.use('/api/notifications', requireAuth, require('./routes/notifications'));
 app.use('/api/internal-messages', requireAuth, require('./routes/internal-messages'));
 app.use('/api/payouts', requireAuth, require('./routes/payouts'));
 app.use('/api/currencies', requireAuth, require('./routes/currencies'));
+app.use('/api/inventory', requireAuth, require('./routes/inventory'));
+app.use('/api/expenses', requireAuth, require('./routes/expenses'));
 // OTA handles its own auth per-route: /bookings uses a webhook secret (external channel
 // managers can't hold a staff JWT), while /availability and /sync-log require staff auth.
 app.use('/api/ota', require('./routes/ota'));

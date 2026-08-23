@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subla Camp — Front Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1B2420;
+    --ink-soft:#4B5750;
+    --canvas:#F6F5F1;
+    --panel:#FFFFFF;
+    --line:#DEDBCE;
+    --pine:#2F4B3C;
+    --pine-soft:#E7EDE7;
+    --ember:#C1633B;
+    --ember-soft:#F5E4DB;
+    --moss:#5C8A5A;
+    --moss-soft:#E7F0E4;
+    --red:#C1392B;
+    --red-soft:#FCF3F1;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--canvas);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .hidden{display:none !important;}
+
+  /* ---------- Login screen ---------- */
+  #login-screen{
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+  }
+  .login-card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:40px 36px;
+    width:100%;
+    max-width:380px;
+    box-shadow:0 1px 3px rgba(0,0,0,0.04);
+  }
+  .login-logo{
+    display:flex;
+    justify-content:center;
+    margin-bottom:20px;
+  }
+  .login-logo img{
+    height:56px;
+    width:auto;
+  }
+  .login-card h1{
+    font-family:'Fraunces',serif;
+    font-weight:500;
+    font-size:22px;
+    text-align:center;
+    margin:0 0 4px;
+  }
+  .login-card p.sub{
+    text-align:center;
+    color:var(--ink-soft);
+    font-size:13px;
+    margin:0 0 24px;
+  }
+  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:16px;}
+  .field label{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.05em;
+    color:var(--ink-soft);
+    font-weight:600;
+  }
+  .field input, .field select{
+    border:1px solid var(--line);
+    border-radius:7px;
+    padding:11px 12px;
+    font-size:14px;
+    font-family:'Inter',sans-serif;
+    color:var(--ink);
+    background:#FDFCFA;
+    width:100%;
+  }
+  .field input:focus, .field select:focus{
+    outline:2px solid var(--pine);
+    outline-offset:1px;
+  }
+  .btn{
+    border:none;
+    border-radius:7px;
+    padding:12px 22px;
+    font-size:14px;
+    font-weight:600;
+    cursor:pointer;
+    font-family:'Inter',sans-serif;
+  }
+  .btn-primary{background:var(--pine); color:#fff; width:100%;}
+  .btn-primary:disabled{opacity:0.6; cursor:default;}
+  .btn-ghost{background:transparent; color:var(--ink-soft); border:1px solid var(--line);}
+  .login-error{
+    background:var(--red-soft);
+    color:var(--red);
+    border-radius:7px;
+    padding:10px 12px;
+    font-size:13px;
+    margin-bottom:16px;
+  }
+
+  /* ---------- App shell ---------- */
+  #app-screen{ min-height:100vh; }
+  .topbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:14px 28px;
+    background:var(--pine);
+    color:#F6F5F1;
+  }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .brand-logo-badge{
+    background:#FFFFFF;
+    border-radius:8px;
+    padding:4px 8px;
+    display:flex;
+    align-items:center;
+    box-shadow:0 1px 3px rgba(0,0,0,0.2);
+  }
+  .brand-logo-badge img{ height:26px; width:auto; display:block; }
+  .brand-text{ display:flex; align-items:baseline; gap:10px; }
+  .brand-mark{ font-family:'Fraunces',serif; font-size:19px; font-weight:600; }
+  .brand-sub{ font-size:12px; color:#C7D4C9; letter-spacing:0.04em; text-transform:uppercase; }
+  .topbar-right{ display:flex; align-items:center; gap:18px; font-size:13px; color:#C7D4C9; }
+  .topbar-right b{ color:#fff; font-weight:600; }
+  .logout-link{
+    background:none; border:none; color:#C7D4C9; font-size:13px;
+    cursor:pointer; text-decoration:underline; font-family:'Inter',sans-serif;
+  }
+
+  .wrap{ max-width:1180px; margin:0 auto; padding:26px 28px 60px; }
+
+  .page-head{ margin-bottom:22px; }
+  .page-head h1{ font-family:'Fraunces',serif; font-weight:500; font-size:28px; margin:0 0 4px; }
+  .page-head p{ margin:0; color:var(--ink-soft); font-size:14px; }
+
+  /* Stat cards */
+  .stat-grid{
+    display:grid;
+    grid-template-columns:repeat(4, 1fr);
+    gap:14px;
+    margin-bottom:28px;
+  }
+  .stat-card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:18px 20px;
+  }
+  .stat-card .label{
+    font-size:11px; text-transform:uppercase; letter-spacing:0.05em;
+    color:var(--ink-soft); font-weight:600; margin-bottom:6px;
+  }
+  .stat-card .value{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:28px; font-weight:500;
+  }
+
+  /* Room grid */
+  .section-title{
+    font-family:'Fraunces',serif; font-size:18px; font-weight:500;
+    margin:0 0 14px;
+  }
+  .room-tags{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+    gap:12px;
+  }
+  .room-tag{
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:14px;
+    position:relative;
+    background:#FDFCFA;
+  }
+  .room-tag.dirty{ border-color:#E9C6BF; background:var(--red-soft); }
+  .room-tag.occupied{ border-color:#D6DEE0; background:#F2F5F5; }
+  .room-tag::before{
+    content:""; position:absolute; top:14px; right:14px;
+    width:8px; height:8px; border-radius:50%; background:var(--moss);
+  }
+  .room-tag.dirty::before{ background:var(--red); }
+  .room-tag.occupied::before{ background:var(--ink-soft); }
+  .room-num{ font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:500; }
+  .room-type{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
+  .room-status{
+    font-size:11px; text-transform:uppercase; letter-spacing:0.04em;
+    margin-top:10px; color:var(--moss); font-weight:600;
+  }
+  .room-tag.dirty .room-status{ color:var(--red); }
+  .room-tag.occupied .room-status{ color:var(--ink-soft); }
+  .room-rate{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-soft); margin-top:6px; }
+
+  .loading, .error-box{
+    text-align:center; padding:40px; color:var(--ink-soft); font-size:14px;
+  }
+  .error-box{ color:var(--red); }
+
+  @media (max-width: 700px){
+    .stat-grid{ grid-template-columns:repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ============ LOGIN SCREEN ============ -->
+  <div id="login-screen">
+    <div class="login-card">
+      <div class="login-logo"><img src="/assets/subla-camp-logo.jpeg" alt="Subla Camp"></div>
+      <h1>Subla Camp Front Desk</h1>
+      <p class="sub">Sign in to continue</p>
+      <div id="login-error" class="login-error hidden"></div>
+      <form id="login-form">
+        <div class="field">
+          <label for="login-username">Username</label>
+          <input type="text" id="login-username" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" id="login-btn">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ MAIN APP ============ -->
+  <div id="app-screen" class="hidden">
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-logo-badge"><img src="/assets/subla-camp-logo.jpeg" alt="Subla Camp"></div>
+        <div class="brand-text">
+          <span class="brand-mark">Subla Camp</span>
+          <span class="brand-sub">Front Desk</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span>Signed in as <b id="topbar-username">—</b></span>
+        <button class="logout-link" id="logout-btn">Sign out</button>
+      </div>
+    </div>
+
+    <div class="wrap">
+      <div class="page-head">
+        <h1>Dashboard</h1>
+        <p>Today's overview at a glance.</p>
+      </div>
+
+      <div id="dashboard-loading" class="loading">Loading today's overview…</div>
+      <div id="dashboard-error" class="error-box hidden"></div>
+
+      <div id="dashboard-content" class="hidden">
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="label">Expected arrivals</div>
+            <div class="value" id="stat-arrivals">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Expected departures</div>
+            <div class="value" id="stat-departures">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">In-house guests</div>
+            <div class="value" id="stat-inhouse">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Rooms to clean</div>
+            <div class="value" id="stat-dirty">—</div>
+          </div>
+        </div>
+
+        <p class="section-title">Room status</p>
+        <div class="room-tags" id="room-grid"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // -------- Config --------
+  const API_BASE = window.location.origin; // frontend and API share the same domain when deployed
+
+  // -------- Auth state (persisted so a page refresh doesn't force re-login) --------
+  function getToken() { return localStorage.getItem('subla_token'); }
+  function getUser() {
+    const raw = localStorage.getItem('subla_user');
+    return raw ? JSON.parse(raw) : null;
+  }
+  function setSession(token, user) {
+    localStorage.setItem('subla_token', token);
+    localStorage.setItem('subla_user', JSON.stringify(user));
+  }
+  function clearSession() {
+    localStorage.removeItem('subla_token');
+    localStorage.removeItem('subla_user');
+  }
+
+  // -------- API helper: attaches the auth token, throws on non-2xx --------
+  async function apiFetch(path, options = {}) {
+    const token = getToken();
+    const headers = Object.assign(
+      { 'Content-Type': 'application/json' },
+      options.headers || {},
+      token ? { Authorization: `Bearer ${token}` } : {}
+    );
+    const res = await fetch(`${API_BASE}${path}`, Object.assign({}, options, { headers }));
+    if (res.status === 401) {
+      // Token expired or invalid — send back to login rather than showing a confusing error.
+      clearSession();
+      showLogin();
+      throw new Error('Session expired. Please sign in again.');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `Request failed (${res.status})`);
+    }
+    return data;
+  }
+
+  // -------- Screen switching --------
+  function showLogin() {
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('app-screen').classList.add('hidden');
+  }
+  function showApp() {
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('app-screen').classList.remove('hidden');
+    const user = getUser();
+    document.getElementById('topbar-username').textContent = user ? user.full_name : '—';
+    loadDashboard();
+  }
+
+  // -------- Login form --------
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errorBox = document.getElementById('login-error');
+    const btn = document.getElementById('login-btn');
+
+    errorBox.classList.add('hidden');
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Invalid username or password');
+      setSession(data.token, data.user);
+      showApp();
+    } catch (err) {
+      errorBox.textContent = err.message;
+      errorBox.classList.remove('hidden');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sign in';
+    }
+  });
+
+  // -------- Logout --------
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    clearSession();
+    showLogin();
+  });
+
+  // -------- Dashboard --------
+  async function loadDashboard() {
+    const loading = document.getElementById('dashboard-loading');
+    const errorBox = document.getElementById('dashboard-error');
+    const content = document.getElementById('dashboard-content');
+
+    loading.classList.remove('hidden');
+    errorBox.classList.add('hidden');
+    content.classList.add('hidden');
+
+    try {
+      const [stats, rooms] = await Promise.all([
+        apiFetch('/api/reservations/dashboard'),
+        apiFetch('/api/rooms'),
+      ]);
+
+      document.getElementById('stat-arrivals').textContent = stats.expected_arrivals;
+      document.getElementById('stat-departures').textContent = stats.expected_departures;
+      document.getElementById('stat-inhouse').textContent = stats.in_house_guests;
+      document.getElementById('stat-dirty').textContent = stats.rooms_to_clean;
+
+      const grid = document.getElementById('room-grid');
+      grid.innerHTML = '';
+      rooms
+        .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }))
+        .forEach((room) => {
+          const isDirty = room.housekeeping_status === 'dirty';
+          const isOccupied = room.occupancy_status === 'occupied';
+          const statusClass = isDirty ? 'dirty' : (isOccupied ? 'occupied' : '');
+          const statusText = isOccupied
+            ? 'Occupied'
+            : (isDirty ? 'Vacant · Dirty' : 'Vacant · Clean');
+
+          const tile = document.createElement('div');
+          tile.className = `room-tag ${statusClass}`.trim();
+          tile.innerHTML = `
+            <div class="room-num">${escapeHtml(room.room_number)}</div>
+            <div class="room-type">${escapeHtml(room.room_type)}</div>
+            <div class="room-status">${statusText}</div>
+            <div class="room-rate">AED ${Number(room.base_rate).toFixed(0)}/night</div>
+          `;
+          grid.appendChild(tile);
+        });
+
+      loading.classList.add('hidden');
+      content.classList.remove('hidden');
+    } catch (err) {
+      loading.classList.add('hidden');
+      errorBox.textContent = err.message || 'Failed to load dashboard. Check your connection and try again.';
+      errorBox.classList.remove('hidden');
+    }
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  // -------- On page load, resume session if we have one --------
+  if (getToken()) {
+    showApp();
+  } else {
+    showLogin();
+  }
+</script>
+
+</body>
+</html>

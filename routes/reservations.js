@@ -165,4 +165,38 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
+// POST /api/reservations/:id/charges — add an extra charge at any point during a stay
+// (damage fee, extra service, airport transfer, late checkout, etc.), not just the
+// last-minute one at checkout (see checkout.js's /charge route) or the automatic ones
+// from consuming inventory. Blocked for cancelled/no_show reservations, since there's
+// no guest folio to bill in those cases.
+router.post('/:id/charges', async (req, res) => {
+  const { id } = req.params;
+  const { description, amount } = req.body;
+  if (!description || amount === undefined) {
+    return res.status(400).json({ error: 'description and amount are required' });
+  }
+  if (Number(amount) <= 0) {
+    return res.status(400).json({ error: 'amount must be positive' });
+  }
+
+  try {
+    const { rows: reservationRows } = await pool.query('SELECT status FROM reservations WHERE id = $1', [id]);
+    if (!reservationRows.length) return res.status(404).json({ error: 'Reservation not found' });
+    if (['cancelled', 'no_show'].includes(reservationRows[0].status)) {
+      return res.status(409).json({ error: `Cannot add a charge to a reservation with status '${reservationRows[0].status}'` });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO folio_transactions (reservation_id, type, description, amount, recorded_by)
+       VALUES ($1, 'extra_charge', $2, $3, $4) RETURNING *`,
+      [id, description, amount, req.user.username]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to add charge' });
+  }
+});
+
 module.exports = router;
