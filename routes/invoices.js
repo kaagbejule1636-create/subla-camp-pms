@@ -87,7 +87,8 @@ router.get('/:reservationId', async (req, res) => {
     doc.moveDown(2);
     doc.fontSize(9).fillColor('#777').text('Thank you for staying with Subla Camp.', { align: 'center' });
 
-    drawTermsAndConditions(doc);
+    const { rows: termsRows } = await pool.query(`SELECT value FROM settings WHERE key = 'terms_and_conditions'`);
+    drawTermsAndConditions(doc, termsRows[0]?.value);
 
     doc.end();
   } catch (err) {

@@ -234,7 +234,7 @@ router.get('/:reservationId/registration-card', async (req, res) => {
     doc.x = 50;
     doc.y = dateY + 24;
 
-    drawTermsAndConditions(doc);
+    drawTermsAndConditions(doc, (await pool.query(`SELECT value FROM settings WHERE key = 'terms_and_conditions'`)).rows[0]?.value);
 
     doc.end();
   } catch (err) {
