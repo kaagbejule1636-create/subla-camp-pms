@@ -143,6 +143,11 @@
     background:none; border:none; color:#C7D4C9; font-size:13px;
     cursor:pointer; text-decoration:underline; font-family:'Inter',sans-serif;
   }
+  .icon-btn{
+    background:none; border:none; color:#C7D4C9; font-size:17px;
+    cursor:pointer; padding:2px 4px; line-height:1;
+  }
+  .icon-btn:hover{ color:#fff; }
 
   .wrap{ max-width:1180px; margin:0 auto; padding:26px 28px 60px; }
 
@@ -191,21 +196,26 @@
   }
   .room-tag.dirty{ border-color:#E9C6BF; background:var(--red-soft); }
   .room-tag.occupied{ border-color:#D6DEE0; background:#F2F5F5; }
+  .room-tag.out_of_order{ border-color:#E3D8B8; background:#FBF6E8; }
   .room-tag::before{
     content:""; position:absolute; top:14px; right:14px;
     width:8px; height:8px; border-radius:50%; background:var(--moss);
   }
   .room-tag.dirty::before{ background:var(--red); }
   .room-tag.occupied::before{ background:var(--ink-soft); }
+  .room-tag.out_of_order::before{ background:#B8933A; }
   .room-num{ font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:500; }
   .room-type{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
   .room-status{
     font-size:11px; text-transform:uppercase; letter-spacing:0.04em;
     margin-top:10px; color:var(--moss); font-weight:600;
+    display:flex; align-items:center; gap:5px;
   }
   .room-tag.dirty .room-status{ color:var(--red); }
   .room-tag.occupied .room-status{ color:var(--ink-soft); }
+  .room-tag.out_of_order .room-status{ color:#9C7A22; }
   .room-rate{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-soft); margin-top:6px; }
+  .clean-icon{ font-size:13px; line-height:1; }
 
   .loading, .error-box{
     text-align:center; padding:40px; color:var(--ink-soft); font-size:14px;
@@ -214,8 +224,13 @@
 
   .room-tag{ cursor:pointer; transition:box-shadow 0.1s; }
   .room-tag:hover{ box-shadow:0 0 0 2px var(--pine); }
-  .room-tag.dirty{ cursor:not-allowed; }
-  .room-tag.dirty:hover{ box-shadow:0 0 0 2px var(--red); }
+
+  .maint-btn{
+    position:absolute; top:12px; right:26px;
+    background:none; border:none; font-size:13px; cursor:pointer;
+    color:var(--ink-soft); padding:2px; line-height:1; opacity:0.55;
+  }
+  .maint-btn:hover{ opacity:1; }
 
   /* ---------- Modal ---------- */
   .modal-backdrop{
@@ -306,6 +321,7 @@
       </div>
       <div class="topbar-right">
         <span>Signed in as <b id="topbar-username">—</b></span>
+        <button class="icon-btn hidden" id="settings-btn" title="Settings">⚙</button>
         <button class="logout-link" id="logout-btn">Sign out</button>
       </div>
     </div>
@@ -313,7 +329,7 @@
     <div class="wrap">
       <div class="page-head">
         <h1>Dashboard</h1>
-        <p>Today's overview at a glance.</p>
+        <p id="today-date">—</p>
       </div>
 
       <div id="dashboard-loading" class="loading">Loading today's overview…</div>
@@ -399,7 +415,34 @@
     document.getElementById('app-screen').classList.remove('hidden');
     const user = getUser();
     document.getElementById('topbar-username').textContent = user ? user.full_name : '—';
+    document.getElementById('settings-btn').classList.toggle('hidden', !(user && user.role === 'manager'));
+    updateTodayDate();
+    startTodayDateAutoRefresh();
     loadDashboard();
+  }
+
+  // Keeps the header date correct even if the browser tab is left open across midnight —
+  // a real scenario for a front-desk computer that stays on for a whole shift or longer.
+  // Checks every minute rather than setting one long timer to the next midnight, so it
+  // stays correct even if the computer sleeps and wakes up, which would throw off a
+  // single scheduled timeout.
+  let todayDateInterval = null;
+  function updateTodayDate() {
+    document.getElementById('today-date').textContent = new Date().toLocaleDateString(undefined, {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    });
+  }
+  function startTodayDateAutoRefresh() {
+    if (todayDateInterval) clearInterval(todayDateInterval);
+    let lastDateString = new Date().toDateString();
+    todayDateInterval = setInterval(() => {
+      const nowDateString = new Date().toDateString();
+      if (nowDateString !== lastDateString) {
+        lastDateString = nowDateString;
+        updateTodayDate();
+        loadDashboard(); // arrivals/departures/room stats are also date-dependent — refresh them too
+      }
+    }, 60000);
   }
 
   // -------- Login form --------
@@ -436,6 +479,7 @@
   // -------- Logout --------
   document.getElementById('logout-btn').addEventListener('click', () => {
     clearSession();
+    if (todayDateInterval) clearInterval(todayDateInterval);
     showLogin();
   });
 
@@ -466,30 +510,75 @@
         .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }))
         .forEach((room) => {
           const isDirty = room.housekeeping_status === 'dirty';
+          const isOutOfOrder = room.housekeeping_status === 'out_of_order';
           const isOccupied = room.occupancy_status === 'occupied';
-          const statusClass = isDirty ? 'dirty' : (isOccupied ? 'occupied' : '');
-          const statusText = isOccupied
-            ? 'Occupied'
-            : (isDirty ? 'Vacant · Dirty' : 'Vacant · Clean');
+          const statusClass = isOutOfOrder ? 'out_of_order' : (isDirty ? 'dirty' : (isOccupied ? 'occupied' : ''));
+          const statusText = isOutOfOrder
+            ? 'Out of Order'
+            : (isOccupied ? 'Occupied' : (isDirty ? 'Vacant · Dirty' : 'Vacant · Clean'));
+          const cleanIcon = isDirty ? '<span class="clean-icon" title="Needs cleaning">🧹</span>' : '';
 
           const tile = document.createElement('div');
           tile.className = `room-tag ${statusClass}`.trim();
           tile.innerHTML = `
             <div class="room-num">${escapeHtml(room.room_number)}</div>
             <div class="room-type">${escapeHtml(room.room_type)}</div>
-            <div class="room-status">${statusText}</div>
+            <div class="room-status">${cleanIcon}${statusText}</div>
             <div class="room-rate">AED ${Number(room.base_rate).toFixed(0)}/night</div>
           `;
-          tile.addEventListener('click', () => {
-            if (isDirty) {
-              alert('This room needs to be cleaned before a new guest can be checked in.');
+
+          // Maintenance toggle — available on any room not currently occupied, so a room
+          // can be blocked from a clean or dirty state, and unblocked back to clean.
+          // Its own click handler stops propagation so it never triggers the tile's main
+          // action (check-in / mark-clean / checkout) underneath it.
+          if (!isOccupied) {
+            const maintBtn = document.createElement('button');
+            maintBtn.className = 'maint-btn';
+            maintBtn.title = isOutOfOrder ? 'Restore room to service' : 'Block room for maintenance';
+            maintBtn.textContent = '🔧';
+            maintBtn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const goingOutOfOrder = !isOutOfOrder;
+              const confirmMsg = goingOutOfOrder
+                ? `Block ${room.room_number} for maintenance? It won't be available for check-in until restored.`
+                : `Restore ${room.room_number} to service? It will be marked clean and available.`;
+              if (!confirm(confirmMsg)) return;
+              try {
+                await apiFetch(`/api/rooms/${room.id}/housekeeping`, {
+                  method: 'PATCH',
+                  body: JSON.stringify({ status: goingOutOfOrder ? 'out_of_order' : 'clean' }),
+                });
+                loadDashboard();
+              } catch (err) {
+                alert(err.message || 'Failed to update room status.');
+              }
+            });
+            tile.appendChild(maintBtn);
+          }
+
+          tile.addEventListener('click', async () => {
+            if (isOutOfOrder) {
+              alert(`${room.room_number} is blocked for maintenance. Use the wrench icon to restore it to service.`);
               return;
             }
             if (isOccupied) {
               openCheckoutModal(room);
-            } else {
-              openCheckinModal(room);
+              return;
             }
+            if (isDirty) {
+              if (!confirm(`Mark ${room.room_number} as clean?`)) return;
+              try {
+                await apiFetch(`/api/rooms/${room.id}/housekeeping`, {
+                  method: 'PATCH',
+                  body: JSON.stringify({ status: 'clean' }),
+                });
+                loadDashboard();
+              } catch (err) {
+                alert(err.message || 'Failed to update room status.');
+              }
+              return;
+            }
+            openCheckinModal(room);
           });
           grid.appendChild(tile);
         });
@@ -837,6 +926,62 @@
     document.getElementById('cos-close').addEventListener('click', closeModal);
     document.getElementById('cos-done').addEventListener('click', closeModal);
   }
+
+  // -------- Settings: editable Terms & Conditions --------
+  async function openSettingsModal() {
+    openModal(`
+      <div class="modal-head">
+        <div><h2>Terms &amp; Conditions</h2><p>Shown on the invoice and registration card.</p></div>
+        <button class="modal-close" id="set-close">&times;</button>
+      </div>
+      <div id="set-body" class="loading">Loading current text…</div>
+    `);
+    document.getElementById('set-close').addEventListener('click', closeModal);
+
+    try {
+      const current = await apiFetch('/api/settings/terms-and-conditions');
+      document.getElementById('set-body').innerHTML = `
+        <div class="field">
+          <label>One point per line — numbered automatically when printed</label>
+          <textarea id="set-tc-text" rows="10" style="width:100%; font-family:'IBM Plex Mono',monospace; font-size:12.5px; padding:10px; border:1px solid var(--line); border-radius:8px; resize:vertical;">${escapeHtml(current.value)}</textarea>
+        </div>
+        <div id="set-error" class="modal-error hidden" style="margin-top:10px;"></div>
+        <div id="set-status" class="modal-status hidden"></div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="set-cancel">Cancel</button>
+          <button class="btn btn-primary" id="set-save">Save</button>
+        </div>
+      `;
+      document.getElementById('set-cancel').addEventListener('click', closeModal);
+      document.getElementById('set-save').addEventListener('click', async () => {
+        const errorBox = document.getElementById('set-error');
+        const statusBox = document.getElementById('set-status');
+        const saveBtn = document.getElementById('set-save');
+        const value = document.getElementById('set-tc-text').value;
+        errorBox.classList.add('hidden');
+        if (!value.trim()) {
+          errorBox.textContent = 'Terms & conditions cannot be empty.';
+          errorBox.classList.remove('hidden');
+          return;
+        }
+        saveBtn.disabled = true;
+        statusBox.textContent = 'Saving…';
+        statusBox.classList.remove('hidden');
+        try {
+          await apiFetch('/api/settings/terms-and-conditions', { method: 'PUT', body: JSON.stringify({ value }) });
+          closeModal();
+        } catch (err) {
+          saveBtn.disabled = false;
+          statusBox.classList.add('hidden');
+          errorBox.textContent = err.message || 'Failed to save.';
+          errorBox.classList.remove('hidden');
+        }
+      });
+    } catch (err) {
+      document.getElementById('set-body').innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load.')}</div>`;
+    }
+  }
+  document.getElementById('settings-btn').addEventListener('click', openSettingsModal);
 
   // -------- On page load, resume session if we have one --------
   if (getToken()) {

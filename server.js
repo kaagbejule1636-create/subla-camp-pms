@@ -34,6 +34,7 @@ app.use('/api/payouts', requireAuth, require('./routes/payouts'));
 app.use('/api/currencies', requireAuth, require('./routes/currencies'));
 app.use('/api/inventory', requireAuth, require('./routes/inventory'));
 app.use('/api/expenses', requireAuth, require('./routes/expenses'));
+app.use('/api/settings', requireAuth, require('./routes/settings'));
 // OTA handles its own auth per-route: /bookings uses a webhook secret (external channel
 // managers can't hold a staff JWT), while /availability and /sync-log require staff auth.
 app.use('/api/ota', require('./routes/ota'));
