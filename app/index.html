@@ -554,6 +554,20 @@
           <input type="text" id="ci-phone" placeholder="+971...">
         </div>
         <div class="field-row">
+          <div class="field">
+            <label>ID type</label>
+            <select id="ci-id-type">
+              <option value="">— None on file —</option>
+              <option value="emirates_id">Emirates ID</option>
+              <option value="passport">Passport</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>ID number</label>
+            <input type="text" id="ci-id-number" placeholder="e.g. 784-1990-1234567-1">
+          </div>
+        </div>
+        <div class="field-row">
           <div class="field required">
             <label>Check-in date</label>
             <input type="date" id="ci-checkin" value="${defaultCheckIn}" required>
@@ -613,6 +627,8 @@
     const guest = {
       full_name: document.getElementById('ci-name').value.trim(),
       phone: document.getElementById('ci-phone').value.trim() || undefined,
+      id_type: document.getElementById('ci-id-type').value || undefined,
+      id_number: document.getElementById('ci-id-number').value.trim() || undefined,
     };
     const check_in_date = document.getElementById('ci-checkin').value;
     const check_out_date = document.getElementById('ci-checkout').value;
@@ -667,9 +683,8 @@
       statusBox.textContent = 'Confirming check-in…';
       await apiFetch(`/api/checkin/${reservation.id}/confirm`, { method: 'POST' });
 
-      statusBox.textContent = 'Done.';
-      closeModal();
       loadDashboard();
+      showCheckinSuccess(reservation, guest.full_name);
     } catch (err) {
       submitBtn.disabled = false;
       statusBox.classList.add('hidden');
@@ -679,6 +694,25 @@
       errorBox.textContent = (err.message || 'Check-in failed.') + partial;
       errorBox.classList.remove('hidden');
     }
+  }
+
+  function showCheckinSuccess(reservation, guestName) {
+    openModal(`
+      <div class="modal-head">
+        <div>
+          <h2>Checked In</h2>
+          <p>Reservation ${escapeHtml(reservation.reservation_code)}</p>
+        </div>
+        <button class="modal-close" id="cis-close">&times;</button>
+      </div>
+      <p style="font-size:14px; margin-bottom:20px;">${escapeHtml(guestName || 'Guest')} is checked in.</p>
+      <div class="modal-actions">
+        <a class="btn btn-ghost" href="${API_BASE}/api/checkin/${reservation.id}/registration-card" target="_blank" rel="noopener">Print Registration Card</a>
+        <button class="btn btn-primary" id="cis-done">Done</button>
+      </div>
+    `);
+    document.getElementById('cis-close').addEventListener('click', closeModal);
+    document.getElementById('cis-done').addEventListener('click', closeModal);
   }
 
   // -------- Check-out flow: look up the active reservation, show the folio, settle + confirm --------
@@ -774,14 +808,34 @@
       statusBox.textContent = 'Confirming check-out…';
       await apiFetch(`/api/checkout/${reservation.id}/confirm`, { method: 'POST' });
 
-      closeModal();
       loadDashboard();
+      showCheckoutSuccess(reservation);
     } catch (err) {
       confirmBtn.disabled = false;
       statusBox.classList.add('hidden');
       errorBox.textContent = err.message || 'Check-out failed.';
       errorBox.classList.remove('hidden');
     }
+  }
+
+  function showCheckoutSuccess(reservation) {
+    openModal(`
+      <div class="modal-head">
+        <div>
+          <h2>Checked Out</h2>
+          <p>Reservation ${escapeHtml(reservation.reservation_code)}</p>
+        </div>
+        <button class="modal-close" id="cos-close">&times;</button>
+      </div>
+      <p style="font-size:14px; margin-bottom:20px;">${escapeHtml(reservation.full_name || 'Guest')} has checked out.</p>
+      <div class="modal-actions" style="flex-wrap:wrap; gap:10px;">
+        <a class="btn btn-ghost" href="${API_BASE}/api/invoices/${reservation.id}" target="_blank" rel="noopener">Print Invoice</a>
+        <a class="btn btn-ghost" href="${API_BASE}/api/checkout/${reservation.id}/gate-pass" target="_blank" rel="noopener">Print Gate Pass</a>
+        <button class="btn btn-primary" id="cos-done">Done</button>
+      </div>
+    `);
+    document.getElementById('cos-close').addEventListener('click', closeModal);
+    document.getElementById('cos-done').addEventListener('click', closeModal);
   }
 
   // -------- On page load, resume session if we have one --------

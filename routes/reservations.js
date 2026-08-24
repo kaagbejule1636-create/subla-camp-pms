@@ -72,6 +72,19 @@ router.post('/', async (req, res) => {
         [guest.full_name, guest.phone, guest.email, guest.nationality, guest.id_type, guest.id_number]
       );
       guestId = created[0].id;
+    } else if (guest.id_type || guest.id_number || guest.nationality) {
+      // Returning guest — fill in any ID/nationality fields that weren't captured before.
+      // Only fills gaps, never overwrites what's already on file (COALESCE keeps the
+      // existing value whenever the new one is null), so a repeat visit can't accidentally
+      // clobber a correct ID with a blank or mistyped one.
+      await client.query(
+        `UPDATE guests SET
+           id_type = COALESCE(id_type, $1),
+           id_number = COALESCE(id_number, $2),
+           nationality = COALESCE(nationality, $3)
+         WHERE id = $4`,
+        [guest.id_type || null, guest.id_number || null, guest.nationality || null, guestId]
+      );
     }
 
     const { rows: guestCheck } = await client.query('SELECT do_not_rent FROM guests WHERE id = $1', [guestId]);
