@@ -149,6 +149,45 @@
   }
   .icon-btn:hover{ color:#fff; }
 
+  /* ---------- Tab navigation ---------- */
+  .tabbar{
+    display:flex; gap:4px; padding:0 28px; background:#fff;
+    border-bottom:1px solid var(--line); overflow-x:auto;
+  }
+  .tab-btn{
+    background:none; border:none; padding:14px 16px; font-size:13.5px;
+    font-family:'Inter',sans-serif; color:var(--ink-soft); cursor:pointer;
+    border-bottom:2px solid transparent; white-space:nowrap;
+  }
+  .tab-btn.active{ color:var(--pine); border-bottom-color:var(--pine); font-weight:600; }
+  .tab-btn:hover{ color:var(--pine); }
+
+  .toolbar{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
+  .toolbar-filters{ display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .toolbar-filters .field{ margin-bottom:0; min-width:140px; }
+
+  table.data-table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  table.data-table th{
+    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:0.04em;
+    color:var(--ink-soft); padding:8px 10px; border-bottom:1px solid var(--line);
+  }
+  table.data-table td{ padding:10px; border-bottom:1px solid var(--line); }
+  table.data-table tr:last-child td{ border-bottom:none; }
+  table.data-table td.num{ text-align:right; font-family:'IBM Plex Mono',monospace; }
+  .amt-in{ color:var(--moss); }
+  .amt-out{ color:var(--red); }
+  .low-stock-badge{
+    display:inline-block; background:var(--red-soft); color:var(--red);
+    font-size:10.5px; padding:2px 7px; border-radius:20px; margin-left:6px;
+  }
+  .summary-row{ display:flex; gap:24px; margin-bottom:18px; flex-wrap:wrap; }
+  .summary-pill{
+    background:#fff; border:1px solid var(--line); border-radius:10px;
+    padding:12px 18px; min-width:140px;
+  }
+  .summary-pill .label{ font-size:11px; text-transform:uppercase; color:var(--ink-soft); letter-spacing:0.04em; }
+  .summary-pill .value{ font-family:'IBM Plex Mono',monospace; font-size:19px; margin-top:3px; }
+
   .wrap{ max-width:1180px; margin:0 auto; padding:26px 28px 60px; }
 
   .page-head{ margin-bottom:22px; }
@@ -326,6 +365,14 @@
       </div>
     </div>
 
+    <div class="tabbar">
+      <button class="tab-btn active" data-view="dashboard">Dashboard</button>
+      <button class="tab-btn" data-view="inventory">Inventory</button>
+      <button class="tab-btn hidden" id="tab-expenses" data-view="expenses">Expenses</button>
+      <button class="tab-btn hidden" id="tab-cashbook" data-view="cashbook">Cashbook</button>
+    </div>
+
+    <div id="view-dashboard">
     <div class="wrap">
       <div class="page-head">
         <h1>Dashboard</h1>
@@ -359,6 +406,11 @@
         <div class="room-tags" id="room-grid"></div>
       </div>
     </div>
+    </div>
+
+    <div id="view-inventory" class="wrap hidden"></div>
+    <div id="view-expenses" class="wrap hidden"></div>
+    <div id="view-cashbook" class="wrap hidden"></div>
   </div>
 
   <!-- ============ MODAL (check-in / check-out) ============ -->
@@ -416,10 +468,33 @@
     const user = getUser();
     document.getElementById('topbar-username').textContent = user ? user.full_name : '—';
     document.getElementById('settings-btn').classList.toggle('hidden', !(user && user.role === 'manager'));
+    // Expenses needs supervisor+ (matches the backend's requireRole('supervisor') on
+    // recording/listing); Cashbook is manager-only (matches reports.js's whole-router gate).
+    const role = user?.role;
+    document.getElementById('tab-expenses').classList.toggle('hidden', !(role === 'manager' || role === 'supervisor'));
+    document.getElementById('tab-cashbook').classList.toggle('hidden', role !== 'manager');
     updateTodayDate();
     startTodayDateAutoRefresh();
-    loadDashboard();
+    switchView('dashboard');
   }
+
+  // -------- Tab navigation --------
+  const VIEWS = ['dashboard', 'inventory', 'expenses', 'cashbook'];
+  function switchView(name) {
+    VIEWS.forEach((v) => {
+      document.getElementById(`view-${v}`).classList.toggle('hidden', v !== name);
+    });
+    document.querySelectorAll('.tab-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.view === name);
+    });
+    if (name === 'dashboard') loadDashboard();
+    else if (name === 'inventory') loadInventoryView();
+    else if (name === 'expenses') loadExpensesView();
+    else if (name === 'cashbook') loadCashbookView();
+  }
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
 
   // Keeps the header date correct even if the browser tab is left open across midnight —
   // a real scenario for a front-desk computer that stays on for a whole shift or longer.
@@ -838,6 +913,19 @@
         <span>Balance due</span><span>AED ${balanceDue.toFixed(2)}</span>
       </div>
 
+      <div style="margin:10px 0 6px;">
+        <button type="button" class="btn btn-ghost" id="co-add-charge-btn" style="font-size:12.5px; padding:6px 12px;">+ Add Charge</button>
+      </div>
+      <div id="co-charge-form" class="hidden" style="margin-bottom:14px; padding:12px; background:#F7F6F1; border-radius:8px;">
+        <div class="field"><label>Description</label><input type="text" id="co-charge-desc" placeholder="e.g. Late checkout fee, damage, airport transfer"></div>
+        <div class="field"><label>Amount (AED)</label><input type="number" id="co-charge-amount" min="0.01" step="0.01"></div>
+        <div id="co-charge-error" class="modal-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="co-charge-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="co-charge-save">Add</button>
+        </div>
+      </div>
+
       <div id="co-error" class="modal-error hidden" style="margin-top:14px;"></div>
       <div id="co-status" class="modal-status hidden"></div>
 
@@ -868,6 +956,39 @@
         </div>
       `}
     `;
+
+    document.getElementById('co-add-charge-btn').addEventListener('click', () => {
+      document.getElementById('co-charge-form').classList.remove('hidden');
+      document.getElementById('co-add-charge-btn').classList.add('hidden');
+    });
+    document.getElementById('co-charge-cancel').addEventListener('click', () => {
+      document.getElementById('co-charge-form').classList.add('hidden');
+      document.getElementById('co-add-charge-btn').classList.remove('hidden');
+    });
+    document.getElementById('co-charge-save').addEventListener('click', async () => {
+      const errorBox = document.getElementById('co-charge-error');
+      errorBox.classList.add('hidden');
+      const description = document.getElementById('co-charge-desc').value.trim();
+      const amount = Number(document.getElementById('co-charge-amount').value);
+      if (!description || !amount || amount <= 0) {
+        errorBox.textContent = 'Enter a description and a positive amount.';
+        errorBox.classList.remove('hidden');
+        return;
+      }
+      try {
+        await apiFetch(`/api/reservations/${reservation.id}/charges`, {
+          method: 'POST',
+          body: JSON.stringify({ description, amount }),
+        });
+        // Re-fetch the folio so the balance reflects the new charge, and re-render in place —
+        // the modal stays open so staff can add several charges without reopening it each time.
+        const freshFolio = await apiFetch(`/api/checkout/${reservation.id}/folio`);
+        renderCheckoutBody(reservation, freshFolio);
+      } catch (err) {
+        errorBox.textContent = err.message || 'Failed to add charge.';
+        errorBox.classList.remove('hidden');
+      }
+    });
 
     document.getElementById('co-cancel').addEventListener('click', closeModal);
     document.getElementById('co-confirm').addEventListener('click', () => handleCheckoutConfirm(reservation, isSettled));
@@ -925,6 +1046,317 @@
     `);
     document.getElementById('cos-close').addEventListener('click', closeModal);
     document.getElementById('cos-done').addEventListener('click', closeModal);
+  }
+
+  // -------- Inventory view --------
+  let inventoryItemsCache = [];
+  async function loadInventoryView() {
+    const container = document.getElementById('view-inventory');
+    container.innerHTML = `<div class="loading">Loading inventory…</div>`;
+    try {
+      const [items, lowStock] = await Promise.all([
+        apiFetch('/api/inventory/items'),
+        apiFetch('/api/inventory/low-stock'),
+      ]);
+      inventoryItemsCache = items;
+      const lowStockIds = new Set(lowStock.map((i) => i.id));
+
+      container.innerHTML = `
+        <div class="page-head"><h1>Inventory</h1><p>Guest-facing supplies — minibar, linens, amenities.</p></div>
+        ${lowStock.length ? `<div class="modal-error" style="margin-bottom:16px;">${lowStock.length} item${lowStock.length === 1 ? '' : 's'} at or below reorder threshold: ${lowStock.map((i) => escapeHtml(i.name)).join(', ')}</div>` : ''}
+        <div class="toolbar">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-ghost" id="inv-restock-btn">Restock a Room</button>
+            <button class="btn btn-ghost" id="inv-consume-btn">Record Consumption</button>
+            <button class="btn btn-primary" id="inv-add-btn">+ Add Item</button>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Item</th><th>Category</th><th>Guest Price</th><th>Central Stock</th><th>Reorder At</th></tr></thead>
+          <tbody>
+            ${items.map((i) => `
+              <tr>
+                <td>${escapeHtml(i.name)}${lowStockIds.has(i.id) ? '<span class="low-stock-badge">Low stock</span>' : ''}</td>
+                <td>${escapeHtml(i.category)}</td>
+                <td class="num">${i.guest_price ? 'AED ' + Number(i.guest_price).toFixed(2) : '—'}</td>
+                <td class="num">${i.current_stock}</td>
+                <td class="num">${i.reorder_threshold}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="5" style="text-align:center; color:var(--ink-soft);">No items yet — add one to get started.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+      document.getElementById('inv-add-btn').addEventListener('click', openAddInventoryItemModal);
+      document.getElementById('inv-restock-btn').addEventListener('click', () => openInventoryActionModal('restock'));
+      document.getElementById('inv-consume-btn').addEventListener('click', () => openInventoryActionModal('consume'));
+    } catch (err) {
+      container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load inventory.')}</div>`;
+    }
+  }
+
+  function openAddInventoryItemModal() {
+    openModal(`
+      <div class="modal-head"><div><h2>Add Inventory Item</h2></div><button class="modal-close" id="ai-close">&times;</button></div>
+      <div id="ai-error" class="modal-error hidden"></div>
+      <form id="ai-form">
+        <div class="field required"><label>Name</label><input type="text" id="ai-name" required placeholder="e.g. Bottled Water 500ml"></div>
+        <div class="field-row">
+          <div class="field"><label>Category</label>
+            <select id="ai-category"><option value="minibar">Minibar</option><option value="linen">Linen</option><option value="amenity">Amenity</option></select>
+          </div>
+          <div class="field"><label>Guest price (AED, blank = never billed)</label><input type="number" id="ai-guest-price" min="0" step="0.01"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Starting central stock</label><input type="number" id="ai-stock" value="0" min="0"></div>
+          <div class="field"><label>Reorder threshold</label><input type="number" id="ai-threshold" value="5" min="0"></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="ai-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add Item</button>
+        </div>
+      </form>
+    `);
+    document.getElementById('ai-close').addEventListener('click', closeModal);
+    document.getElementById('ai-cancel').addEventListener('click', closeModal);
+    document.getElementById('ai-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorBox = document.getElementById('ai-error');
+      errorBox.classList.add('hidden');
+      const name = document.getElementById('ai-name').value.trim();
+      if (!name) { errorBox.textContent = 'Name is required.'; errorBox.classList.remove('hidden'); return; }
+      try {
+        await apiFetch('/api/inventory/items', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            category: document.getElementById('ai-category').value,
+            guest_price: document.getElementById('ai-guest-price').value || null,
+            current_stock: Number(document.getElementById('ai-stock').value) || 0,
+            reorder_threshold: Number(document.getElementById('ai-threshold').value) || 0,
+          }),
+        });
+        closeModal();
+        loadInventoryView();
+      } catch (err) {
+        errorBox.textContent = err.message || 'Failed to add item.';
+        errorBox.classList.remove('hidden');
+      }
+    });
+  }
+
+  // `mode` is 'restock' (central stock -> a room) or 'consume' (a room's stock -> guest use,
+  // optionally billed to a reservation). Shares one form shape since both need room + item + qty.
+  async function openInventoryActionModal(mode) {
+    const isRestock = mode === 'restock';
+    const rooms = await apiFetch('/api/rooms');
+    openModal(`
+      <div class="modal-head"><div><h2>${isRestock ? 'Restock a Room' : 'Record Consumption'}</h2></div><button class="modal-close" id="iv-close">&times;</button></div>
+      <div id="iv-error" class="modal-error hidden"></div>
+      <form id="iv-form">
+        <div class="field required"><label>Room</label>
+          <select id="iv-room" required>${rooms.map((r) => `<option value="${r.id}">${escapeHtml(r.room_number)}</option>`).join('')}</select>
+        </div>
+        <div class="field required"><label>Item</label>
+          <select id="iv-item" required>${inventoryItemsCache.map((i) => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join('')}</select>
+        </div>
+        <div class="field required"><label>Quantity</label><input type="number" id="iv-qty" min="1" value="1" required></div>
+        ${!isRestock ? `<div class="field"><label>Reservation ID (optional — bills the guest if the item has a guest price)</label><input type="number" id="iv-reservation" min="1"></div>` : ''}
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="iv-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">${isRestock ? 'Restock' : 'Record'}</button>
+        </div>
+      </form>
+    `);
+    document.getElementById('iv-close').addEventListener('click', closeModal);
+    document.getElementById('iv-cancel').addEventListener('click', closeModal);
+    document.getElementById('iv-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorBox = document.getElementById('iv-error');
+      errorBox.classList.add('hidden');
+      const roomId = document.getElementById('iv-room').value;
+      const itemId = document.getElementById('iv-item').value;
+      const qty = Number(document.getElementById('iv-qty').value);
+      try {
+        if (isRestock) {
+          await apiFetch(`/api/inventory/rooms/${roomId}/restock`, {
+            method: 'POST', body: JSON.stringify({ item_id: itemId, quantity: qty }),
+          });
+        } else {
+          const reservationId = document.getElementById('iv-reservation').value;
+          await apiFetch(`/api/inventory/rooms/${roomId}/consume`, {
+            method: 'POST', body: JSON.stringify({ item_id: itemId, quantity: qty, reservation_id: reservationId || undefined }),
+          });
+        }
+        closeModal();
+        loadInventoryView();
+      } catch (err) {
+        errorBox.textContent = err.message || 'Failed to save.';
+        errorBox.classList.remove('hidden');
+      }
+    });
+  }
+
+  // -------- Expenses view --------
+  function currentMonthRange() {
+    const now = new Date();
+    const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+    return { start, end };
+  }
+
+  async function loadExpensesView() {
+    const container = document.getElementById('view-expenses');
+    const { start, end } = currentMonthRange();
+    container.innerHTML = `<div class="loading">Loading expenses…</div>`;
+    const user = getUser();
+    const isManager = user?.role === 'manager';
+
+    try {
+      const [expenses, summary] = await Promise.all([
+        apiFetch(`/api/expenses?start=${start}&end=${end}`),
+        isManager ? apiFetch(`/api/expenses/summary?start=${start}&end=${end}`) : Promise.resolve(null),
+      ]);
+
+      container.innerHTML = `
+        <div class="page-head"><h1>Expenses</h1><p>${start} to ${end}</p></div>
+        ${summary ? `
+          <div class="summary-row">
+            <div class="summary-pill"><div class="label">Total this period</div><div class="value">AED ${summary.total_expenses.toFixed(2)}</div></div>
+            ${summary.by_category.slice(0, 3).map((c) => `<div class="summary-pill"><div class="label">${escapeHtml(c.category)}</div><div class="value">AED ${c.total.toFixed(2)}</div></div>`).join('')}
+          </div>
+        ` : ''}
+        <div class="toolbar">
+          <div></div>
+          <button class="btn btn-primary" id="exp-add-btn">+ Add Expense</button>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Vendor</th><th>Method</th><th>Amount</th></tr></thead>
+          <tbody>
+            ${expenses.map((e) => `
+              <tr>
+                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                <td>${escapeHtml(e.category)}</td>
+                <td>${escapeHtml(e.description)}</td>
+                <td>${escapeHtml(e.vendor || '—')}</td>
+                <td>${escapeHtml(e.payment_method || '—')}</td>
+                <td class="num">AED ${Number(e.amount).toFixed(2)}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center; color:var(--ink-soft);">No expenses recorded this month.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+      document.getElementById('exp-add-btn').addEventListener('click', openAddExpenseModal);
+    } catch (err) {
+      container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load expenses.')}</div>`;
+    }
+  }
+
+  function openAddExpenseModal() {
+    openModal(`
+      <div class="modal-head"><div><h2>Add Expense</h2></div><button class="modal-close" id="ae-close">&times;</button></div>
+      <div id="ae-error" class="modal-error hidden"></div>
+      <form id="ae-form">
+        <div class="field-row">
+          <div class="field required"><label>Category</label>
+            <select id="ae-category">
+              <option value="utilities">Utilities</option><option value="salaries">Salaries</option>
+              <option value="supplies">Supplies</option><option value="maintenance">Maintenance</option>
+              <option value="marketing">Marketing</option><option value="other">Other</option>
+            </select>
+          </div>
+          <div class="field required"><label>Amount (AED)</label><input type="number" id="ae-amount" min="0.01" step="0.01" required></div>
+        </div>
+        <div class="field required"><label>Description</label><input type="text" id="ae-description" required></div>
+        <div class="field-row">
+          <div class="field"><label>Vendor</label><input type="text" id="ae-vendor"></div>
+          <div class="field"><label>Payment method</label>
+            <select id="ae-payment-method"><option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select>
+          </div>
+        </div>
+        <div class="field"><label>Date</label><input type="date" id="ae-date" value="${todayISO()}"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="ae-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add Expense</button>
+        </div>
+      </form>
+    `);
+    document.getElementById('ae-close').addEventListener('click', closeModal);
+    document.getElementById('ae-cancel').addEventListener('click', closeModal);
+    document.getElementById('ae-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorBox = document.getElementById('ae-error');
+      errorBox.classList.add('hidden');
+      const amount = Number(document.getElementById('ae-amount').value);
+      const description = document.getElementById('ae-description').value.trim();
+      if (!description || !amount) { errorBox.textContent = 'Description and amount are required.'; errorBox.classList.remove('hidden'); return; }
+      try {
+        await apiFetch('/api/expenses', {
+          method: 'POST',
+          body: JSON.stringify({
+            category: document.getElementById('ae-category').value,
+            amount, description,
+            vendor: document.getElementById('ae-vendor').value.trim() || undefined,
+            payment_method: document.getElementById('ae-payment-method').value,
+            expense_date: document.getElementById('ae-date').value,
+          }),
+        });
+        closeModal();
+        loadExpensesView();
+      } catch (err) {
+        errorBox.textContent = err.message || 'Failed to add expense.';
+        errorBox.classList.remove('hidden');
+      }
+    });
+  }
+
+  // -------- Cashbook view (manager-only, matches backend gating) --------
+  async function loadCashbookView(customStart, customEnd) {
+    const container = document.getElementById('view-cashbook');
+    const { start, end } = currentMonthRange();
+    const rangeStart = customStart || start;
+    const rangeEnd = customEnd || end;
+    container.innerHTML = `<div class="loading">Loading cashbook…</div>`;
+
+    try {
+      const cb = await apiFetch(`/api/reports/cashbook?start=${rangeStart}&end=${rangeEnd}`);
+      container.innerHTML = `
+        <div class="page-head"><h1>Cashbook</h1><p>Auto-compiled from real transactions — not manually entered.</p></div>
+        <div class="toolbar">
+          <div class="toolbar-filters">
+            <div class="field"><label>From</label><input type="date" id="cb-start" value="${rangeStart}"></div>
+            <div class="field"><label>To</label><input type="date" id="cb-end" value="${rangeEnd}"></div>
+            <button class="btn btn-ghost" id="cb-filter-btn" style="height:38px;">Apply</button>
+          </div>
+        </div>
+        <div class="summary-row">
+          <div class="summary-pill"><div class="label">Opening Balance</div><div class="value">AED ${cb.opening_balance.toFixed(2)}</div></div>
+          <div class="summary-pill"><div class="label">Total In</div><div class="value amt-in">AED ${cb.total_in.toFixed(2)}</div></div>
+          <div class="summary-pill"><div class="label">Total Out</div><div class="value amt-out">AED ${cb.total_out.toFixed(2)}</div></div>
+          <div class="summary-pill"><div class="label">Closing Balance</div><div class="value">AED ${cb.closing_balance.toFixed(2)}</div></div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>Description</th><th>Source</th><th>In</th><th>Out</th><th>Balance</th></tr></thead>
+          <tbody>
+            ${cb.entries.map((e) => `
+              <tr>
+                <td>${new Date(e.date).toLocaleDateString()}</td>
+                <td>${escapeHtml(e.description)}${e.reservation_code ? ' · ' + escapeHtml(e.reservation_code) : ''}</td>
+                <td>${escapeHtml(e.source)}</td>
+                <td class="num amt-in">${e.direction === 'in' ? 'AED ' + e.amount.toFixed(2) : ''}</td>
+                <td class="num amt-out">${e.direction === 'out' ? 'AED ' + e.amount.toFixed(2) : ''}</td>
+                <td class="num">AED ${e.running_balance.toFixed(2)}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center; color:var(--ink-soft);">No cash movements in this period.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+      document.getElementById('cb-filter-btn').addEventListener('click', () => {
+        loadCashbookView(document.getElementById('cb-start').value, document.getElementById('cb-end').value);
+      });
+    } catch (err) {
+      container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load cashbook.')}</div>`;
+    }
   }
 
   // -------- Settings: editable Terms & Conditions --------

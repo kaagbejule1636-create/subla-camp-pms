@@ -148,4 +148,86 @@ router.get('/cashier-shift', async (req, res) => {
   }
 });
 
+// GET /api/reports/cashbook?start=&end= — a running cash ledger, auto-compiled from real
+// transactions instead of manually re-entered into a spreadsheet. Only actual cash
+// movements count: guest payments and deposits (in), refunds and drawer pay-outs (out),
+// and recorded expenses (out). Room charges and other folio entries that don't represent
+// money actually changing hands are deliberately excluded — this is a cash position, not
+// a revenue report (see /revenue for that).
+//
+// Carries forward a real opening balance from everything before the period, the way a
+// physical cashbook does, rather than resetting to zero every time someone picks a date
+// range — otherwise the running balance shown wouldn't mean anything.
+router.get('/cashbook', async (req, res) => {
+  const { start, end } = req.query;
+  if (!start || !end) return res.status(400).json({ error: 'start and end are required' });
+
+  try {
+    const { rows: openingRows } = await pool.query(
+      `SELECT COALESCE(SUM(
+         CASE WHEN type IN ('payment','deposit') THEN amount ELSE -amount END
+       ), 0) AS total
+       FROM folio_transactions
+       WHERE type IN ('payment','deposit','refund','pay_out') AND created_at::date < $1`,
+      [start]
+    );
+    const { rows: openingExpenseRows } = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE expense_date < $1`,
+      [start]
+    );
+    const openingBalance = Number(openingRows[0].total) - Number(openingExpenseRows[0].total);
+
+    const { rows: entries } = await pool.query(
+      `SELECT ts, description, signed_amount, direction, source, reservation_code FROM (
+         SELECT ft.created_at AS ts, ft.description,
+                CASE WHEN ft.type IN ('payment','deposit') THEN ft.amount ELSE -ft.amount END AS signed_amount,
+                CASE WHEN ft.type IN ('payment','deposit') THEN 'in' ELSE 'out' END AS direction,
+                'guest' AS source, r.reservation_code
+         FROM folio_transactions ft
+         JOIN reservations r ON r.id = ft.reservation_id
+         WHERE ft.type IN ('payment','deposit','refund','pay_out')
+           AND ft.created_at::date BETWEEN $1 AND $2
+
+         UNION ALL
+
+         SELECT e.created_at AS ts, e.description, -e.amount AS signed_amount,
+                'out' AS direction, 'expense' AS source, NULL AS reservation_code
+         FROM expenses e
+         WHERE e.expense_date BETWEEN $1 AND $2
+       ) combined
+       ORDER BY ts ASC`,
+      [start, end]
+    );
+
+    let running = openingBalance;
+    const ledger = entries.map((row) => {
+      running += Number(row.signed_amount);
+      return {
+        date: row.ts,
+        description: row.description,
+        direction: row.direction,
+        amount: Math.abs(Number(row.signed_amount)),
+        source: row.source,
+        reservation_code: row.reservation_code,
+        running_balance: running,
+      };
+    });
+
+    const totalIn = ledger.filter((e) => e.direction === 'in').reduce((s, e) => s + e.amount, 0);
+    const totalOut = ledger.filter((e) => e.direction === 'out').reduce((s, e) => s + e.amount, 0);
+
+    res.json({
+      start, end,
+      opening_balance: openingBalance,
+      closing_balance: running,
+      total_in: totalIn,
+      total_out: totalOut,
+      entries: ledger,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to build cashbook' });
+  }
+});
+
 module.exports = router;
