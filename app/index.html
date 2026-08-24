@@ -707,7 +707,7 @@
       </div>
       <p style="font-size:14px; margin-bottom:20px;">${escapeHtml(guestName || 'Guest')} is checked in.</p>
       <div class="modal-actions">
-        <a class="btn btn-ghost" href="${API_BASE}/api/checkin/${reservation.id}/registration-card" target="_blank" rel="noopener">Print Registration Card</a>
+        <a class="btn btn-ghost" href="${API_BASE}/api/checkin/${reservation.id}/registration-card?token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print Registration Card</a>
         <button class="btn btn-primary" id="cis-done">Done</button>
       </div>
     `);
@@ -829,8 +829,8 @@
       </div>
       <p style="font-size:14px; margin-bottom:20px;">${escapeHtml(reservation.full_name || 'Guest')} has checked out.</p>
       <div class="modal-actions" style="flex-wrap:wrap; gap:10px;">
-        <a class="btn btn-ghost" href="${API_BASE}/api/invoices/${reservation.id}" target="_blank" rel="noopener">Print Invoice</a>
-        <a class="btn btn-ghost" href="${API_BASE}/api/checkout/${reservation.id}/gate-pass" target="_blank" rel="noopener">Print Gate Pass</a>
+        <a class="btn btn-ghost" href="${API_BASE}/api/invoices/${reservation.id}?token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print Invoice</a>
+        <a class="btn btn-ghost" href="${API_BASE}/api/checkout/${reservation.id}/gate-pass?token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print Gate Pass</a>
         <button class="btn btn-primary" id="cos-done">Done</button>
       </div>
     `);
