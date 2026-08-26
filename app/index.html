@@ -1053,6 +1053,10 @@
   async function loadInventoryView() {
     const container = document.getElementById('view-inventory');
     container.innerHTML = `<div class="loading">Loading inventory…</div>`;
+    const user = getUser();
+    const canEdit = user?.role === 'manager' || user?.role === 'supervisor';
+    const isManager = user?.role === 'manager';
+
     try {
       const [items, lowStock] = await Promise.all([
         apiFetch('/api/inventory/items'),
@@ -1065,15 +1069,15 @@
         <div class="page-head"><h1>Inventory</h1><p>Guest-facing supplies — minibar, linens, amenities.</p></div>
         ${lowStock.length ? `<div class="modal-error" style="margin-bottom:16px;">${lowStock.length} item${lowStock.length === 1 ? '' : 's'} at or below reorder threshold: ${lowStock.map((i) => escapeHtml(i.name)).join(', ')}</div>` : ''}
         <div class="toolbar">
-          <div></div>
+          <a class="btn btn-ghost" href="${API_BASE}/api/inventory/print?token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print</a>
           <div style="display:flex; gap:8px;">
             <button class="btn btn-ghost" id="inv-restock-btn">Restock a Room</button>
             <button class="btn btn-ghost" id="inv-consume-btn">Record Consumption</button>
-            <button class="btn btn-primary" id="inv-add-btn">+ Add Item</button>
+            ${canEdit ? `<button class="btn btn-primary" id="inv-add-btn">+ Add Item</button>` : ''}
           </div>
         </div>
         <table class="data-table">
-          <thead><tr><th>Item</th><th>Category</th><th>Guest Price</th><th>Central Stock</th><th>Reorder At</th></tr></thead>
+          <thead><tr><th>Item</th><th>Category</th><th>Guest Price</th><th>Central Stock</th><th>Reorder At</th>${canEdit ? '<th></th>' : ''}</tr></thead>
           <tbody>
             ${items.map((i) => `
               <tr>
@@ -1082,14 +1086,27 @@
                 <td class="num">${i.guest_price ? 'AED ' + Number(i.guest_price).toFixed(2) : '—'}</td>
                 <td class="num">${i.current_stock}</td>
                 <td class="num">${i.reorder_threshold}</td>
+                ${canEdit ? `
+                  <td style="white-space:nowrap;">
+                    <button class="icon-btn" style="color:var(--ink-soft); font-size:14px;" data-edit-item="${i.id}" title="Edit">✎</button>
+                    ${isManager ? `<button class="icon-btn" style="color:var(--red); font-size:14px;" data-deactivate-item="${i.id}" title="Deactivate">🗑</button>` : ''}
+                  </td>
+                ` : ''}
               </tr>
-            `).join('') || '<tr><td colspan="5" style="text-align:center; color:var(--ink-soft);">No items yet — add one to get started.</td></tr>'}
+            `).join('') || `<tr><td colspan="${canEdit ? 6 : 5}" style="text-align:center; color:var(--ink-soft);">No items yet — add one to get started.</td></tr>`}
           </tbody>
         </table>
       `;
-      document.getElementById('inv-add-btn').addEventListener('click', openAddInventoryItemModal);
+      if (canEdit) document.getElementById('inv-add-btn').addEventListener('click', openAddInventoryItemModal);
       document.getElementById('inv-restock-btn').addEventListener('click', () => openInventoryActionModal('restock'));
       document.getElementById('inv-consume-btn').addEventListener('click', () => openInventoryActionModal('consume'));
+      container.querySelectorAll('[data-edit-item]').forEach((btn) => {
+        const item = items.find((i) => i.id === Number(btn.dataset.editItem));
+        btn.addEventListener('click', () => openEditInventoryItemModal(item));
+      });
+      container.querySelectorAll('[data-deactivate-item]').forEach((btn) => {
+        btn.addEventListener('click', () => handleDeactivateItem(Number(btn.dataset.deactivateItem)));
+      });
     } catch (err) {
       container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load inventory.')}</div>`;
     }
@@ -1143,6 +1160,63 @@
         errorBox.classList.remove('hidden');
       }
     });
+  }
+
+  function openEditInventoryItemModal(item) {
+    openModal(`
+      <div class="modal-head"><div><h2>Edit Item</h2></div><button class="modal-close" id="ei-close">&times;</button></div>
+      <div id="ei-error" class="modal-error hidden"></div>
+      <form id="ei-form">
+        <div class="field required"><label>Name</label><input type="text" id="ei-name" value="${escapeHtml(item.name)}" required></div>
+        <div class="field-row">
+          <div class="field"><label>Category</label>
+            <select id="ei-category">
+              ${['minibar', 'linen', 'amenity'].map((c) => `<option value="${c}" ${c === item.category ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Guest price (AED, blank = never billed)</label><input type="number" id="ei-guest-price" min="0" step="0.01" value="${item.guest_price || ''}"></div>
+        </div>
+        <div class="field"><label>Reorder threshold</label><input type="number" id="ei-threshold" min="0" value="${item.reorder_threshold}"></div>
+        <p style="font-size:12px; color:var(--ink-soft);">Central stock (currently ${item.current_stock}) can only change through Restock or Record Consumption, so every change stays tied to a logged transaction.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="ei-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    `);
+    document.getElementById('ei-close').addEventListener('click', closeModal);
+    document.getElementById('ei-cancel').addEventListener('click', closeModal);
+    document.getElementById('ei-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorBox = document.getElementById('ei-error');
+      errorBox.classList.add('hidden');
+      try {
+        await apiFetch(`/api/inventory/items/${item.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: document.getElementById('ei-name').value.trim(),
+            category: document.getElementById('ei-category').value,
+            guest_price: document.getElementById('ei-guest-price').value || null,
+            reorder_threshold: Number(document.getElementById('ei-threshold').value),
+          }),
+        });
+        closeModal();
+        loadInventoryView();
+      } catch (err) {
+        errorBox.textContent = err.message || 'Failed to save changes.';
+        errorBox.classList.remove('hidden');
+      }
+    });
+  }
+
+  async function handleDeactivateItem(id) {
+    if (!confirm('Deactivate this item? It will no longer appear in the active list, but past transactions involving it stay on record.')) return;
+    try {
+      await apiFetch(`/api/inventory/items/${id}`, { method: 'DELETE' });
+      loadInventoryView();
+    } catch (err) {
+      alert(err.message || 'Failed to deactivate item.');
+    }
   }
 
   // `mode` is 'restock' (central stock -> a room) or 'consume' (a room's stock -> guest use,
@@ -1211,6 +1285,7 @@
     container.innerHTML = `<div class="loading">Loading expenses…</div>`;
     const user = getUser();
     const isManager = user?.role === 'manager';
+    const canEdit = isManager || user?.role === 'supervisor';
 
     try {
       const [expenses, summary] = await Promise.all([
@@ -1227,11 +1302,11 @@
           </div>
         ` : ''}
         <div class="toolbar">
-          <div></div>
+          <a class="btn btn-ghost" href="${API_BASE}/api/expenses/print?start=${start}&end=${end}&token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print</a>
           <button class="btn btn-primary" id="exp-add-btn">+ Add Expense</button>
         </div>
         <table class="data-table">
-          <thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Vendor</th><th>Method</th><th>Amount</th></tr></thead>
+          <thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Vendor</th><th>Method</th><th>Amount</th>${canEdit ? '<th></th>' : ''}</tr></thead>
           <tbody>
             ${expenses.map((e) => `
               <tr>
@@ -1241,15 +1316,98 @@
                 <td>${escapeHtml(e.vendor || '—')}</td>
                 <td>${escapeHtml(e.payment_method || '—')}</td>
                 <td class="num">AED ${Number(e.amount).toFixed(2)}</td>
+                ${canEdit ? `
+                  <td style="white-space:nowrap;">
+                    <button class="icon-btn" style="color:var(--ink-soft); font-size:14px;" data-edit-expense="${e.id}" title="Edit">✎</button>
+                    ${isManager ? `<button class="icon-btn" style="color:var(--red); font-size:14px;" data-delete-expense="${e.id}" title="Delete">🗑</button>` : ''}
+                  </td>
+                ` : ''}
               </tr>
-            `).join('') || '<tr><td colspan="6" style="text-align:center; color:var(--ink-soft);">No expenses recorded this month.</td></tr>'}
+            `).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" style="text-align:center; color:var(--ink-soft);">No expenses recorded this month.</td></tr>`}
           </tbody>
         </table>
       `;
       document.getElementById('exp-add-btn').addEventListener('click', openAddExpenseModal);
+      container.querySelectorAll('[data-edit-expense]').forEach((btn) => {
+        const expense = expenses.find((e) => e.id === Number(btn.dataset.editExpense));
+        btn.addEventListener('click', () => openEditExpenseModal(expense));
+      });
+      container.querySelectorAll('[data-delete-expense]').forEach((btn) => {
+        btn.addEventListener('click', () => handleDeleteExpense(Number(btn.dataset.deleteExpense)));
+      });
     } catch (err) {
       container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load expenses.')}</div>`;
     }
+  }
+
+  async function handleDeleteExpense(id) {
+    if (!confirm('Delete this expense? This cannot be undone.')) return;
+    try {
+      await apiFetch(`/api/expenses/${id}`, { method: 'DELETE' });
+      loadExpensesView();
+    } catch (err) {
+      alert(err.message || 'Failed to delete expense.');
+    }
+  }
+
+  function openEditExpenseModal(expense, onSuccess) {
+    openModal(`
+      <div class="modal-head"><div><h2>Edit Expense</h2></div><button class="modal-close" id="ee-close">&times;</button></div>
+      <div id="ee-error" class="modal-error hidden"></div>
+      <form id="ee-form">
+        <div class="field-row">
+          <div class="field required"><label>Category</label>
+            <select id="ee-category">
+              ${['utilities', 'salaries', 'supplies', 'maintenance', 'marketing', 'other'].map((c) =>
+                `<option value="${c}" ${c === expense.category ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="field required"><label>Amount (AED)</label><input type="number" id="ee-amount" min="0.01" step="0.01" value="${Number(expense.amount)}" required></div>
+        </div>
+        <div class="field required"><label>Description</label><input type="text" id="ee-description" value="${escapeHtml(expense.description)}" required></div>
+        <div class="field-row">
+          <div class="field"><label>Vendor</label><input type="text" id="ee-vendor" value="${escapeHtml(expense.vendor || '')}"></div>
+          <div class="field"><label>Payment method</label>
+            <select id="ee-payment-method">
+              ${['cash', 'card', 'bank_transfer'].map((m) =>
+                `<option value="${m}" ${m === expense.payment_method ? 'selected' : ''}>${m === 'bank_transfer' ? 'Bank transfer' : m.charAt(0).toUpperCase() + m.slice(1)}</option>`
+              ).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field"><label>Date</label><input type="date" id="ee-date" value="${new Date(expense.expense_date).toISOString().slice(0, 10)}"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="ee-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    `);
+    document.getElementById('ee-close').addEventListener('click', closeModal);
+    document.getElementById('ee-cancel').addEventListener('click', closeModal);
+    document.getElementById('ee-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorBox = document.getElementById('ee-error');
+      errorBox.classList.add('hidden');
+      try {
+        await apiFetch(`/api/expenses/${expense.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            category: document.getElementById('ee-category').value,
+            amount: Number(document.getElementById('ee-amount').value),
+            description: document.getElementById('ee-description').value.trim(),
+            vendor: document.getElementById('ee-vendor').value.trim() || null,
+            payment_method: document.getElementById('ee-payment-method').value,
+            expense_date: document.getElementById('ee-date').value,
+          }),
+        });
+        closeModal();
+        (onSuccess || loadExpensesView)();
+      } catch (err) {
+        errorBox.textContent = err.message || 'Failed to save changes.';
+        errorBox.classList.remove('hidden');
+      }
+    });
   }
 
   function openAddExpenseModal() {
@@ -1317,6 +1475,9 @@
     const rangeStart = customStart || start;
     const rangeEnd = customEnd || end;
     container.innerHTML = `<div class="loading">Loading cashbook…</div>`;
+    const user = getUser();
+    const canEditExpenses = user?.role === 'manager' || user?.role === 'supervisor';
+    const isManager = user?.role === 'manager';
 
     try {
       const cb = await apiFetch(`/api/reports/cashbook?start=${rangeStart}&end=${rangeEnd}`);
@@ -1328,6 +1489,7 @@
             <div class="field"><label>To</label><input type="date" id="cb-end" value="${rangeEnd}"></div>
             <button class="btn btn-ghost" id="cb-filter-btn" style="height:38px;">Apply</button>
           </div>
+          <a class="btn btn-ghost" href="${API_BASE}/api/reports/cashbook/print?start=${rangeStart}&end=${rangeEnd}&token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print</a>
         </div>
         <div class="summary-row">
           <div class="summary-pill"><div class="label">Opening Balance</div><div class="value">AED ${cb.opening_balance.toFixed(2)}</div></div>
@@ -1335,8 +1497,11 @@
           <div class="summary-pill"><div class="label">Total Out</div><div class="value amt-out">AED ${cb.total_out.toFixed(2)}</div></div>
           <div class="summary-pill"><div class="label">Closing Balance</div><div class="value">AED ${cb.closing_balance.toFixed(2)}</div></div>
         </div>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 10px;">
+          Expense entries can be corrected here. Guest payment/deposit entries can't be edited or deleted directly — they're tied to that guest's actual folio and invoice, so a correction there should be a new refund or charge on their reservation instead, to keep the record straight.
+        </p>
         <table class="data-table">
-          <thead><tr><th>Date</th><th>Description</th><th>Source</th><th>In</th><th>Out</th><th>Balance</th></tr></thead>
+          <thead><tr><th>Date</th><th>Description</th><th>Source</th><th>In</th><th>Out</th><th>Balance</th>${canEditExpenses ? '<th></th>' : ''}</tr></thead>
           <tbody>
             ${cb.entries.map((e) => `
               <tr>
@@ -1346,13 +1511,45 @@
                 <td class="num amt-in">${e.direction === 'in' ? 'AED ' + e.amount.toFixed(2) : ''}</td>
                 <td class="num amt-out">${e.direction === 'out' ? 'AED ' + e.amount.toFixed(2) : ''}</td>
                 <td class="num">AED ${e.running_balance.toFixed(2)}</td>
+                ${canEditExpenses ? `
+                  <td style="white-space:nowrap;">
+                    ${e.expense_id ? `
+                      <button class="icon-btn" style="color:var(--ink-soft); font-size:14px;" data-cb-edit="${e.expense_id}" title="Edit expense">✎</button>
+                      ${isManager ? `<button class="icon-btn" style="color:var(--red); font-size:14px;" data-cb-delete="${e.expense_id}" title="Delete expense">🗑</button>` : ''}
+                    ` : ''}
+                  </td>
+                ` : ''}
               </tr>
-            `).join('') || '<tr><td colspan="6" style="text-align:center; color:var(--ink-soft);">No cash movements in this period.</td></tr>'}
+            `).join('') || `<tr><td colspan="${canEditExpenses ? 7 : 6}" style="text-align:center; color:var(--ink-soft);">No cash movements in this period.</td></tr>`}
           </tbody>
         </table>
       `;
       document.getElementById('cb-filter-btn').addEventListener('click', () => {
         loadCashbookView(document.getElementById('cb-start').value, document.getElementById('cb-end').value);
+      });
+      container.querySelectorAll('[data-cb-edit]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          // The cashbook doesn't carry the full expense record (category, vendor, etc.),
+          // only what's needed for the ledger display — fetch the real record before editing.
+          try {
+            const all = await apiFetch(`/api/expenses?start=${rangeStart}&end=${rangeEnd}`);
+            const expense = all.find((x) => x.id === Number(btn.dataset.cbEdit));
+            if (expense) openEditExpenseModal(expense, () => loadCashbookView(rangeStart, rangeEnd));
+          } catch (err) {
+            alert(err.message || 'Failed to load expense details.');
+          }
+        });
+      });
+      container.querySelectorAll('[data-cb-delete]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Delete this expense? This cannot be undone.')) return;
+          try {
+            await apiFetch(`/api/expenses/${btn.dataset.cbDelete}`, { method: 'DELETE' });
+            loadCashbookView(rangeStart, rangeEnd);
+          } catch (err) {
+            alert(err.message || 'Failed to delete expense.');
+          }
+        });
       });
     } catch (err) {
       container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load cashbook.')}</div>`;

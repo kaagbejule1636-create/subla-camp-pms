@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const PDFDocument = require('pdfkit');
 const { requireRole } = require('../middleware/auth');
+const { drawLetterhead } = require('../services/pdf-letterhead');
 
 // GET /api/inventory/items — list item types
 router.get('/items', async (req, res) => {
@@ -28,6 +30,100 @@ router.post('/items', requireRole('supervisor'), async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to create inventory item' });
+  }
+});
+
+// PATCH /api/inventory/items/:id — edit an item's details (supervisor+, matches creation).
+// Deliberately does NOT accept current_stock here — stock only moves through the
+// restock/consume endpoints, so every change to it stays tied to a logged transaction.
+// A miscounted shelf is a real scenario this doesn't cover yet; that'd need its own
+// "adjust" action logged the same way, not a silent edit here.
+router.patch('/items/:id', requireRole('supervisor'), async (req, res) => {
+  const { id } = req.params;
+  const { name, category, unit_cost, guest_price, reorder_threshold } = req.body;
+  try {
+    const { rows: existingRows } = await pool.query('SELECT * FROM inventory_items WHERE id = $1', [id]);
+    if (!existingRows.length) return res.status(404).json({ error: 'Item not found' });
+    const existing = existingRows[0];
+    const { rows } = await pool.query(
+      `UPDATE inventory_items SET name = $1, category = $2, unit_cost = $3, guest_price = $4, reorder_threshold = $5
+       WHERE id = $6 RETURNING *`,
+      [
+        name || existing.name, category || existing.category, unit_cost ?? existing.unit_cost,
+        guest_price ?? existing.guest_price, reorder_threshold ?? existing.reorder_threshold, id,
+      ]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update item' });
+  }
+});
+
+// DELETE /api/inventory/items/:id — manager only. This deactivates the item rather than
+// removing the row: inventory_transactions and room_inventory both reference items with no
+// cascade, so a real DELETE would fail outright on any item that's ever been restocked or
+// consumed — which is most items worth deleting in the first place. Deactivating keeps
+// historical transactions valid and simply drops it from the active item list and low-stock
+// checks.
+router.delete('/items/:id', requireRole('manager'), async (req, res) => {
+  const { rows } = await pool.query(
+    `UPDATE inventory_items SET active = FALSE WHERE id = $1 RETURNING id`,
+    [req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Item not found' });
+  res.json({ deactivated: true, id: rows[0].id });
+});
+
+// GET /api/inventory/print — a printable PDF listing of all active items, with low-stock
+// items called out. Same letterhead/table pattern as the housekeeping report.
+router.get('/print', async (req, res) => {
+  try {
+    const { rows: items } = await pool.query('SELECT * FROM inventory_items WHERE active = TRUE ORDER BY category, name');
+
+    const doc = new PDFDocument({ margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=inventory-${new Date().toISOString().slice(0, 10)}.pdf`);
+    doc.pipe(res);
+
+    drawLetterhead(doc, 'Inventory');
+    doc.fontSize(10).fillColor('#555').text(`Generated: ${new Date().toLocaleString()}`);
+    doc.fillColor('#000');
+    doc.moveDown();
+
+    const colX = { name: 50, category: 240, price: 340, stock: 430, reorder: 500 };
+    doc.fontSize(9).fillColor('#555');
+    doc.text('Item', colX.name, doc.y);
+    doc.text('Category', colX.category, doc.y - doc.currentLineHeight());
+    doc.text('Guest Price', colX.price, doc.y - doc.currentLineHeight());
+    doc.text('Stock', colX.stock, doc.y - doc.currentLineHeight());
+    doc.text('Reorder At', colX.reorder, doc.y - doc.currentLineHeight());
+    doc.x = 50;
+    doc.moveDown(0.3);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(0.3);
+
+    doc.fontSize(10).fillColor('#000');
+    items.forEach((item) => {
+      const rowY = doc.y;
+      const lowStock = item.current_stock <= item.reorder_threshold;
+      doc.fillColor('#000').text(item.name, colX.name, rowY, { width: 180 });
+      doc.text(item.category, colX.category, rowY);
+      doc.text(item.guest_price ? `AED ${Number(item.guest_price).toFixed(2)}` : '—', colX.price, rowY);
+      doc.fillColor(lowStock ? '#C1392B' : '#000').text(String(item.current_stock), colX.stock, rowY);
+      doc.fillColor('#000').text(String(item.reorder_threshold), colX.reorder, rowY);
+      doc.moveDown(0.5);
+    });
+    doc.x = 50;
+
+    if (items.length === 0) {
+      doc.fontSize(10).fillColor('#555').text('No inventory items on file.');
+    }
+
+    doc.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate inventory report' });
   }
 });
 
