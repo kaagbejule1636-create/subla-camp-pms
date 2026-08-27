@@ -88,6 +88,7 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Combined daily report (Occupancy + Front Office + Housekeeping) | `GET /api/reports/daily?date=` (manager only) |
 | Print night audit | `GET /api/night-audit/print?date=` |
 | Change stay dates in place | `PATCH /api/reservations/:id/stay` — `{check_out_date}`; extends or shortens without a checkout/new-checkin cycle |
+| List reservations | `GET /api/reservations?start=&end=&status=` — every booking with its room and dates; defaults to a 60-day window (30 back, 30 ahead) if no dates given |
 | Print combined daily report | `GET /api/reports/daily/print?date=` (manager only) |
 | Edit an inventory item | `PATCH /api/inventory/items/:id` (supervisor+) — not stock levels, see design note |
 | Deactivate an inventory item | `DELETE /api/inventory/items/:id` (manager only) — deactivates, doesn't hard-delete, see design note |
@@ -156,6 +157,8 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 - **The housekeeping report was built weeks ago but never actually reachable** — the PDF worked if you knew the URL, but nothing in the app linked to it. There's now a small "Print Housekeeping Report" link right next to the room grid on the dashboard.
 
 - **Advance reservations and Change Stay.** "New Reservation" creates a booking without assigning a room or checking the guest in — it deliberately stays that way until the guest actually arrives, at which point the check-in modal's new "Existing Reservation" tab (search by name or code) finishes the job: assigns a room and confirms check-in for that same reservation, rather than accidentally creating a duplicate. "Change Stay" (in the checkout screen) extends or shortens a stay in place. Extending auto-adds the correct room charge for the added nights and checks for a real booking conflict on that room first; shortening deliberately does **not** auto-refund — a refund needs a human decision, not something the system decides on its own. Verified the billing math, the conflict detection, and the full advance-booking-to-check-in handoff against real seeded data, not just by reading the code.
+
+- **The Reservations tab is a real gap I hadn't caught until it came up** — until now, there was no way to see all bookings with their rooms and dates in one place, which became a genuine problem the moment advance bookings existed, since those don't show up anywhere on the live room grid until check-in. Defaults to a 60-day window rather than the property's entire history, filterable by status and date range. Verified the "Not assigned" case (an advance booking with no room yet) shows correctly, not just the common case.
 
 ## Not yet built (next phases)
 

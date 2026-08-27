@@ -7,6 +7,44 @@ function generateReservationCode() {
   return `SC-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
+// GET /api/reservations?start=&end=&status= — lists reservations, most useful for seeing
+// what's booked into which room and when, especially advance bookings that don't show up
+// anywhere on the live room grid until the guest actually checks in. All filters optional:
+// with no dates given, defaults to a 60-day window (30 back, 30 ahead) so this doesn't
+// silently return the entire history of the property by default.
+router.get('/', async (req, res) => {
+  const { status } = req.query;
+  const start = req.query.start || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const end = req.query.end || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+
+  const conditions = ['res.check_in_date <= $2', 'res.check_out_date >= $1'];
+  const values = [start, end];
+  if (status) {
+    values.push(status);
+    conditions.push(`res.status = $${values.length}`);
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT res.id, res.reservation_code, res.status, res.check_in_date, res.check_out_date,
+              res.adults, res.children, res.rate_per_night,
+              g.full_name AS guest_name, g.phone,
+              rt.name AS room_type, rm.room_number
+       FROM reservations res
+       JOIN guests g ON g.id = res.guest_id
+       JOIN room_types rt ON rt.id = res.room_type_id
+       LEFT JOIN rooms rm ON rm.id = res.room_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY res.check_in_date ASC`,
+      values
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to load reservations' });
+  }
+});
+
 // GET /api/reservations/search?q=Aisha — used by the check-in "search reservation" step
 router.get('/search', async (req, res) => {
   const { q } = req.query;

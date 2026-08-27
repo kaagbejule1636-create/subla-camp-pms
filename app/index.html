@@ -368,6 +368,7 @@
 
     <div class="tabbar">
       <button class="tab-btn active" data-view="dashboard">Dashboard</button>
+      <button class="tab-btn" data-view="reservations">Reservations</button>
       <button class="tab-btn" data-view="inventory">Inventory</button>
       <button class="tab-btn hidden" id="tab-expenses" data-view="expenses">Expenses</button>
       <button class="tab-btn hidden" id="tab-cashbook" data-view="cashbook">Cashbook</button>
@@ -428,6 +429,7 @@
     </div>
     </div>
 
+    <div id="view-reservations" class="wrap hidden"></div>
     <div id="view-inventory" class="wrap hidden"></div>
     <div id="view-expenses" class="wrap hidden"></div>
     <div id="view-cashbook" class="wrap hidden"></div>
@@ -503,7 +505,7 @@
   }
 
   // -------- Tab navigation --------
-  const VIEWS = ['dashboard', 'inventory', 'expenses', 'cashbook', 'reports', 'night-audit'];
+  const VIEWS = ['dashboard', 'reservations', 'inventory', 'expenses', 'cashbook', 'reports', 'night-audit'];
   function switchView(name) {
     VIEWS.forEach((v) => {
       document.getElementById(`view-${v}`).classList.toggle('hidden', v !== name);
@@ -512,6 +514,7 @@
       btn.classList.toggle('active', btn.dataset.view === name);
     });
     if (name === 'dashboard') loadDashboard();
+    else if (name === 'reservations') loadReservationsView();
     else if (name === 'inventory') loadInventoryView();
     else if (name === 'expenses') loadExpensesView();
     else if (name === 'cashbook') loadCashbookView();
@@ -1409,6 +1412,72 @@
 
   // -------- Inventory view --------
   let inventoryItemsCache = [];
+  // -------- Reservations view: every booking with its room and dates in one place —
+  // especially useful for advance bookings, which don't appear anywhere on the live room
+  // grid until the guest actually checks in. --------
+  async function loadReservationsView(customStart, customEnd, customStatus) {
+    const container = document.getElementById('view-reservations');
+    container.innerHTML = `<div class="loading">Loading reservations…</div>`;
+
+    const params = new URLSearchParams();
+    if (customStart) params.set('start', customStart);
+    if (customEnd) params.set('end', customEnd);
+    if (customStatus) params.set('status', customStatus);
+
+    try {
+      const reservations = await apiFetch(`/api/reservations?${params.toString()}`);
+      const statusColor = {
+        confirmed: 'var(--ink-soft)', checked_in: 'var(--moss)', checked_out: 'var(--ink-soft)',
+        cancelled: 'var(--red)', no_show: 'var(--red)',
+      };
+
+      container.innerHTML = `
+        <div class="page-head"><h1>Reservations</h1><p>Every booking, with its room and dates — including advance bookings not yet checked in.</p></div>
+        <div class="toolbar">
+          <div class="toolbar-filters">
+            <div class="field"><label>From</label><input type="date" id="rv-start" value="${customStart || ''}"></div>
+            <div class="field"><label>To</label><input type="date" id="rv-end" value="${customEnd || ''}"></div>
+            <div class="field"><label>Status</label>
+              <select id="rv-status">
+                <option value="">All</option>
+                <option value="confirmed" ${customStatus === 'confirmed' ? 'selected' : ''}>Confirmed (not arrived)</option>
+                <option value="checked_in" ${customStatus === 'checked_in' ? 'selected' : ''}>Checked In</option>
+                <option value="checked_out" ${customStatus === 'checked_out' ? 'selected' : ''}>Checked Out</option>
+                <option value="cancelled" ${customStatus === 'cancelled' ? 'selected' : ''}>Cancelled</option>
+                <option value="no_show" ${customStatus === 'no_show' ? 'selected' : ''}>No-Show</option>
+              </select>
+            </div>
+            <button class="btn btn-ghost" id="rv-filter-btn" style="height:38px;">Apply</button>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Guest</th><th>Room</th><th>Room Type</th><th>Check-in</th><th>Check-out</th><th>Status</th></tr></thead>
+          <tbody>
+            ${reservations.map((r) => `
+              <tr>
+                <td>${escapeHtml(r.guest_name)}<br><span style="color:var(--ink-soft); font-size:11.5px;">${escapeHtml(r.reservation_code)}</span></td>
+                <td>${r.room_number ? escapeHtml(r.room_number) : '<span style="color:var(--ink-soft);">Not assigned</span>'}</td>
+                <td>${escapeHtml(r.room_type)}</td>
+                <td>${new Date(r.check_in_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</td>
+                <td>${new Date(r.check_out_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</td>
+                <td style="color:${statusColor[r.status] || 'var(--ink)'};">${escapeHtml(r.status.replace('_', ' '))}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center; color:var(--ink-soft);">No reservations in this range.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+      document.getElementById('rv-filter-btn').addEventListener('click', () => {
+        loadReservationsView(
+          document.getElementById('rv-start').value,
+          document.getElementById('rv-end').value,
+          document.getElementById('rv-status').value
+        );
+      });
+    } catch (err) {
+      container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load reservations.')}</div>`;
+    }
+  }
+
   async function loadInventoryView() {
     const container = document.getElementById('view-inventory');
     container.innerHTML = `<div class="loading">Loading inventory…</div>`;
