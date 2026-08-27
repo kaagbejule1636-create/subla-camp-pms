@@ -87,6 +87,7 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Print cashbook | `GET /api/reports/cashbook/print?start=&end=` (manager only) |
 | Combined daily report (Occupancy + Front Office + Housekeeping) | `GET /api/reports/daily?date=` (manager only) |
 | Print night audit | `GET /api/night-audit/print?date=` |
+| Change stay dates in place | `PATCH /api/reservations/:id/stay` — `{check_out_date}`; extends or shortens without a checkout/new-checkin cycle |
 | Print combined daily report | `GET /api/reports/daily/print?date=` (manager only) |
 | Edit an inventory item | `PATCH /api/inventory/items/:id` (supervisor+) — not stock levels, see design note |
 | Deactivate an inventory item | `DELETE /api/inventory/items/:id` (manager only) — deactivates, doesn't hard-delete, see design note |
@@ -153,6 +154,8 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 
 - **Night Audit finally has a real screen**, not just raw API endpoints — preview the day's numbers, see who'll be marked no-show, close the day (supervisor+, matching the API's own gating), print it, and browse recent history, all in one place. The print PDF reuses the exact same summary-building function as the on-screen preview, so the two can never show different numbers for the same day. Tab visible to supervisor+ only, since that's who can actually close a day — verified this boundary with a real receptionist login, not just by reading the gating code.
 - **The housekeeping report was built weeks ago but never actually reachable** — the PDF worked if you knew the URL, but nothing in the app linked to it. There's now a small "Print Housekeeping Report" link right next to the room grid on the dashboard.
+
+- **Advance reservations and Change Stay.** "New Reservation" creates a booking without assigning a room or checking the guest in — it deliberately stays that way until the guest actually arrives, at which point the check-in modal's new "Existing Reservation" tab (search by name or code) finishes the job: assigns a room and confirms check-in for that same reservation, rather than accidentally creating a duplicate. "Change Stay" (in the checkout screen) extends or shortens a stay in place. Extending auto-adds the correct room charge for the added nights and checks for a real booking conflict on that room first; shortening deliberately does **not** auto-refund — a refund needs a human decision, not something the system decides on its own. Verified the billing math, the conflict detection, and the full advance-booking-to-check-in handoff against real seeded data, not just by reading the code.
 
 ## Not yet built (next phases)
 

@@ -76,7 +76,7 @@ router.post('/:reservationId/payment', async (req, res) => {
       [
         reservationId,
         type === 'deposit' ? 'deposit' : 'payment',
-        type === 'deposit' ? 'Advance deposit at check-in' : 'Payment at check-in',
+        type === 'deposit' ? 'Advance deposit' : 'Payment received',
         resolved.amount,
         resolved.currency,
         resolved.exchange_rate,

@@ -377,9 +377,12 @@
 
     <div id="view-dashboard">
     <div class="wrap">
-      <div class="page-head">
-        <h1>Dashboard</h1>
-        <p id="today-date">—</p>
+      <div class="page-head" style="display:flex; justify-content:space-between; align-items:flex-end;">
+        <div>
+          <h1>Dashboard</h1>
+          <p id="today-date">—</p>
+        </div>
+        <button class="btn btn-primary" id="new-reservation-btn">+ New Reservation</button>
       </div>
 
       <div id="dashboard-loading" class="loading">Loading today's overview…</div>
@@ -742,11 +745,27 @@
     openModal(`
       <div class="modal-head">
         <div>
-          <h2>New Check-In — ${escapeHtml(room.room_number)}</h2>
+          <h2>Check-In — ${escapeHtml(room.room_number)}</h2>
           <p>${escapeHtml(room.room_type)} · AED ${Number(room.base_rate).toFixed(0)}/night</p>
         </div>
         <button class="modal-close" id="ci-close">&times;</button>
       </div>
+      <div class="tabbar" style="padding:0; margin-bottom:16px;">
+        <button type="button" class="tab-btn active" id="ci-tab-new" style="padding:8px 14px;">New Guest</button>
+        <button type="button" class="tab-btn" id="ci-tab-existing" style="padding:8px 14px;">Existing Reservation</button>
+      </div>
+
+      <div id="ci-panel-existing" class="hidden">
+        <div class="field">
+          <label>Search by guest name or reservation code</label>
+          <input type="text" id="ex-search" placeholder="Start typing…">
+        </div>
+        <div id="ex-results" style="max-height:280px; overflow-y:auto;"></div>
+        <div id="ex-error" class="modal-error hidden"></div>
+        <div id="ex-status" class="modal-status hidden"></div>
+      </div>
+
+      <div id="ci-panel-new">
       <div id="ci-error" class="modal-error hidden"></div>
       <div id="ci-status" class="modal-status hidden"></div>
       <form id="ci-form">
@@ -829,11 +848,87 @@
           <button type="submit" class="btn btn-primary" id="ci-submit">Check In Guest</button>
         </div>
       </form>
+      </div>
     `);
 
     document.getElementById('ci-close').addEventListener('click', closeModal);
     document.getElementById('ci-cancel').addEventListener('click', closeModal);
     document.getElementById('ci-form').addEventListener('submit', (e) => handleCheckinSubmit(e, room));
+
+    // -------- Tab switching --------
+    const tabNew = document.getElementById('ci-tab-new');
+    const tabExisting = document.getElementById('ci-tab-existing');
+    const panelNew = document.getElementById('ci-panel-new');
+    const panelExisting = document.getElementById('ci-panel-existing');
+    tabNew.addEventListener('click', () => {
+      tabNew.classList.add('active');
+      tabExisting.classList.remove('active');
+      panelNew.classList.remove('hidden');
+      panelExisting.classList.add('hidden');
+    });
+    tabExisting.addEventListener('click', () => {
+      tabExisting.classList.add('active');
+      tabNew.classList.remove('active');
+      panelExisting.classList.remove('hidden');
+      panelNew.classList.add('hidden');
+    });
+
+    // -------- Existing-reservation search: for a guest with an advance booking who's now
+    // arrived. Only ever shows reservations that haven't arrived yet (status='confirmed') —
+    // a search box needs debouncing so it doesn't fire an API call on every keystroke.
+    let searchDebounce = null;
+    document.getElementById('ex-search').addEventListener('input', (e) => {
+      clearTimeout(searchDebounce);
+      const q = e.target.value.trim();
+      const resultsBox = document.getElementById('ex-results');
+      if (q.length < 2) { resultsBox.innerHTML = ''; return; }
+      searchDebounce = setTimeout(async () => {
+        try {
+          const results = await apiFetch(`/api/reservations/search?q=${encodeURIComponent(q)}`);
+          const pending = results.filter((r) => r.status === 'confirmed');
+          resultsBox.innerHTML = pending.length
+            ? pending.map((r) => `
+                <div class="folio-line" style="cursor:pointer;" data-res-id="${r.id}">
+                  <span><b>${escapeHtml(r.guest_name)}</b> — ${escapeHtml(r.reservation_code)}<br>
+                    <span style="color:var(--ink-soft); font-size:12px;">${escapeHtml(r.room_type)} · ${new Date(r.check_in_date).toLocaleDateString(undefined, { timeZone: 'UTC' })} – ${new Date(r.check_out_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</span>
+                  </span>
+                  <span class="btn btn-ghost" style="font-size:12px; padding:4px 10px;">Check In</span>
+                </div>
+              `).join('')
+            : `<p style="color:var(--ink-soft); font-size:13px;">No matching advance reservations found.</p>`;
+          resultsBox.querySelectorAll('[data-res-id]').forEach((row) => {
+            const match = pending.find((r) => r.id === Number(row.dataset.resId));
+            row.addEventListener('click', () => handleExistingCheckin(match, room));
+          });
+        } catch (err) {
+          document.getElementById('ex-error').textContent = err.message || 'Search failed.';
+          document.getElementById('ex-error').classList.remove('hidden');
+        }
+      }, 300);
+    });
+  }
+
+  async function handleExistingCheckin(reservation, room) {
+    const statusBox = document.getElementById('ex-status');
+    const errorBox = document.getElementById('ex-error');
+    errorBox.classList.add('hidden');
+    statusBox.classList.remove('hidden');
+    try {
+      statusBox.textContent = `Assigning ${room.room_number}…`;
+      await apiFetch(`/api/reservations/${reservation.id}/assign-room`, {
+        method: 'PATCH',
+        body: JSON.stringify({ room_id: room.id }),
+      });
+      statusBox.textContent = 'Confirming check-in…';
+      await apiFetch(`/api/checkin/${reservation.id}/confirm`, { method: 'POST' });
+
+      loadDashboard();
+      showCheckinSuccess(reservation, reservation.guest_name);
+    } catch (err) {
+      statusBox.classList.add('hidden');
+      errorBox.textContent = err.message || 'Failed to check in this reservation.';
+      errorBox.classList.remove('hidden');
+    }
   }
 
   async function handleCheckinSubmit(e, room) {
@@ -937,6 +1032,165 @@
     document.getElementById('cis-done').addEventListener('click', closeModal);
   }
 
+  // -------- New Reservation: an advance booking, for a guest arriving on a future date.
+  // Deliberately does NOT assign a room or confirm check-in — that happens later, when the
+  // guest actually arrives, via the "Existing Reservation" option in the check-in modal
+  // (see openCheckinModal below). A deposit can still be taken now, ahead of arrival.
+  async function openNewReservationModal() {
+    const rooms = await apiFetch('/api/rooms');
+    const roomTypes = [...new Map(rooms.map((r) => [r.room_type_id, { id: r.room_type_id, name: r.room_type, base_rate: r.base_rate }])).values()];
+    const defaultCheckIn = todayISO();
+    const defaultCheckOut = addDaysISO(defaultCheckIn, 1);
+
+    openModal(`
+      <div class="modal-head">
+        <div><h2>New Reservation</h2><p>For a guest arriving on any date — today or later.</p></div>
+        <button class="modal-close" id="nr-close">&times;</button>
+      </div>
+      <div id="nr-error" class="modal-error hidden"></div>
+      <div id="nr-status" class="modal-status hidden"></div>
+      <form id="nr-form">
+        <div class="field required">
+          <label>Guest full name</label>
+          <input type="text" id="nr-name" required>
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="text" id="nr-phone" placeholder="+971...">
+        </div>
+        <div class="field required">
+          <label>Room type</label>
+          <select id="nr-room-type" required>
+            ${roomTypes.map((rt) => `<option value="${rt.id}" data-rate="${rt.base_rate}">${escapeHtml(rt.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field-row">
+          <div class="field required">
+            <label>Check-in date</label>
+            <input type="date" id="nr-checkin" value="${defaultCheckIn}" required>
+          </div>
+          <div class="field required">
+            <label>Check-out date</label>
+            <input type="date" id="nr-checkout" value="${defaultCheckOut}" required>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Adults</label>
+            <input type="number" id="nr-adults" value="2" min="1">
+          </div>
+          <div class="field">
+            <label>Children</label>
+            <input type="number" id="nr-children" value="0" min="0">
+          </div>
+        </div>
+        <div class="field required">
+          <label>Rate per night (AED)</label>
+          <input type="number" id="nr-rate" value="${roomTypes[0]?.base_rate || 0}" min="0" step="0.01" required>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Deposit collected now (AED)</label>
+            <input type="number" id="nr-deposit" value="0" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label>Payment method</label>
+            <select id="nr-payment-method">
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank transfer</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="nr-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Reservation</button>
+        </div>
+      </form>
+    `);
+
+    document.getElementById('nr-close').addEventListener('click', closeModal);
+    document.getElementById('nr-cancel').addEventListener('click', closeModal);
+    // Rate auto-fills from the selected room type, but stays editable in case a special rate applies.
+    document.getElementById('nr-room-type').addEventListener('change', (e) => {
+      const rate = e.target.selectedOptions[0].dataset.rate;
+      document.getElementById('nr-rate').value = rate;
+    });
+    document.getElementById('nr-form').addEventListener('submit', (e) => handleNewReservationSubmit(e));
+  }
+
+  async function handleNewReservationSubmit(e) {
+    e.preventDefault();
+    const errorBox = document.getElementById('nr-error');
+    const statusBox = document.getElementById('nr-status');
+    const submitBtn = e.target.querySelector('button[type=submit]');
+    errorBox.classList.add('hidden');
+
+    const guest = { full_name: document.getElementById('nr-name').value.trim(), phone: document.getElementById('nr-phone').value.trim() || undefined };
+    const room_type_id = document.getElementById('nr-room-type').value;
+    const check_in_date = document.getElementById('nr-checkin').value;
+    const check_out_date = document.getElementById('nr-checkout').value;
+    const adults = Number(document.getElementById('nr-adults').value) || 1;
+    const children = Number(document.getElementById('nr-children').value) || 0;
+    const rate_per_night = Number(document.getElementById('nr-rate').value);
+    const deposit = Number(document.getElementById('nr-deposit').value) || 0;
+    const payment_method = document.getElementById('nr-payment-method').value;
+
+    if (!guest.full_name) {
+      errorBox.textContent = 'Guest name is required.';
+      errorBox.classList.remove('hidden');
+      return;
+    }
+    if (check_out_date <= check_in_date) {
+      errorBox.textContent = 'Check-out date must be after check-in date.';
+      errorBox.classList.remove('hidden');
+      return;
+    }
+
+    submitBtn.disabled = true;
+    statusBox.classList.remove('hidden');
+    statusBox.textContent = 'Creating reservation…';
+
+    try {
+      const reservation = await apiFetch('/api/reservations', {
+        method: 'POST',
+        body: JSON.stringify({ guest, room_type_id, check_in_date, check_out_date, adults, children, rate_per_night, source: 'direct' }),
+      });
+
+      if (deposit > 0) {
+        statusBox.textContent = 'Recording deposit…';
+        await apiFetch(`/api/checkin/${reservation.id}/payment`, {
+          method: 'POST',
+          body: JSON.stringify({ amount: deposit, payment_method, type: 'deposit' }),
+        });
+      }
+
+      closeModal();
+      openModal(`
+        <div class="modal-head">
+          <div><h2>Reservation Created</h2><p>${escapeHtml(reservation.reservation_code)}</p></div>
+          <button class="modal-close" id="nrs-close">&times;</button>
+        </div>
+        <p style="font-size:14px; margin-bottom:20px;">
+          ${escapeHtml(guest.full_name)} — arriving ${new Date(check_in_date).toLocaleDateString()}.
+          No room has been assigned yet; check them in from their room on arrival using
+          "Existing Reservation" in the check-in screen.
+        </p>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="nrs-done">Done</button>
+        </div>
+      `);
+      document.getElementById('nrs-close').addEventListener('click', closeModal);
+      document.getElementById('nrs-done').addEventListener('click', closeModal);
+    } catch (err) {
+      submitBtn.disabled = false;
+      statusBox.classList.add('hidden');
+      errorBox.textContent = err.message || 'Failed to create reservation.';
+      errorBox.classList.remove('hidden');
+    }
+  }
+  document.getElementById('new-reservation-btn').addEventListener('click', openNewReservationModal);
+
   // -------- Check-out flow: look up the active reservation, show the folio, settle + confirm --------
   async function openCheckoutModal(room) {
     openModal(`
@@ -971,8 +1225,9 @@
         <span>Balance due</span><span>AED ${balanceDue.toFixed(2)}</span>
       </div>
 
-      <div style="margin:10px 0 6px;">
+      <div style="margin:10px 0 6px; display:flex; gap:8px;">
         <button type="button" class="btn btn-ghost" id="co-add-charge-btn" style="font-size:12.5px; padding:6px 12px;">+ Add Charge</button>
+        <button type="button" class="btn btn-ghost" id="co-change-stay-btn" style="font-size:12.5px; padding:6px 12px;">Change Stay</button>
       </div>
       <div id="co-charge-form" class="hidden" style="margin-bottom:14px; padding:12px; background:#F7F6F1; border-radius:8px;">
         <div class="field"><label>Description</label><input type="text" id="co-charge-desc" placeholder="e.g. Late checkout fee, damage, airport transfer"></div>
@@ -981,6 +1236,18 @@
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="co-charge-cancel">Cancel</button>
           <button type="button" class="btn btn-primary" id="co-charge-save">Add</button>
+        </div>
+      </div>
+      <div id="co-stay-form" class="hidden" style="margin-bottom:14px; padding:12px; background:#F7F6F1; border-radius:8px;">
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 10px;">
+          Current stay: ${new Date(reservation.check_in_date).toLocaleDateString(undefined, { timeZone: 'UTC' })} – ${new Date(reservation.check_out_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}.
+          Extending automatically adds a room charge for the extra nights; shortening does not automatically refund anything.
+        </p>
+        <div class="field"><label>New check-out date</label><input type="date" id="co-stay-checkout" value="${new Date(reservation.check_out_date).toISOString().slice(0, 10)}"></div>
+        <div id="co-stay-error" class="modal-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="co-stay-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="co-stay-save">Save</button>
         </div>
       </div>
 
@@ -1044,6 +1311,40 @@
         renderCheckoutBody(reservation, freshFolio);
       } catch (err) {
         errorBox.textContent = err.message || 'Failed to add charge.';
+        errorBox.classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('co-change-stay-btn').addEventListener('click', () => {
+      document.getElementById('co-stay-form').classList.remove('hidden');
+      document.getElementById('co-change-stay-btn').classList.add('hidden');
+    });
+    document.getElementById('co-stay-cancel').addEventListener('click', () => {
+      document.getElementById('co-stay-form').classList.add('hidden');
+      document.getElementById('co-change-stay-btn').classList.remove('hidden');
+    });
+    document.getElementById('co-stay-save').addEventListener('click', async () => {
+      const errorBox = document.getElementById('co-stay-error');
+      errorBox.classList.add('hidden');
+      const newCheckout = document.getElementById('co-stay-checkout').value;
+      if (!newCheckout) {
+        errorBox.textContent = 'Pick a new check-out date.';
+        errorBox.classList.remove('hidden');
+        return;
+      }
+      try {
+        const result = await apiFetch(`/api/reservations/${reservation.id}/stay`, {
+          method: 'PATCH',
+          body: JSON.stringify({ check_out_date: newCheckout }),
+        });
+        reservation.check_out_date = result.check_out_date;
+        const freshFolio = await apiFetch(`/api/checkout/${reservation.id}/folio`);
+        renderCheckoutBody(reservation, freshFolio);
+        if (result.charge_added) {
+          alert(`Stay extended by ${result.nights_added} night(s). AED ${result.charge_added.toFixed(2)} added to the folio.`);
+        }
+      } catch (err) {
+        errorBox.textContent = err.message || 'Failed to change stay dates.';
         errorBox.classList.remove('hidden');
       }
     });

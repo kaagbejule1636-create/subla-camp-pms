@@ -257,4 +257,88 @@ router.get('/by-room/:roomId', async (req, res) => {
   }
 });
 
+// PATCH /api/reservations/:id/stay — extend or shorten a stay in place, without a
+// checkout/new-checkin cycle. Works for both a guest currently in-house (checked_in) and
+// an advance booking that hasn't arrived yet (confirmed).
+//
+// Extending automatically posts a room charge for the added nights, at the reservation's
+// existing rate, so the extra revenue isn't silently missed. Shortening does NOT
+// auto-refund — money already collected needs a human decision about whether it's
+// refundable, so that stays a manual action via the existing folio tools rather than
+// something this endpoint decides on its own.
+router.patch('/:id/stay', async (req, res) => {
+  const { id } = req.params;
+  const { check_in_date, check_out_date } = req.body;
+  if (!check_out_date) return res.status(400).json({ error: 'check_out_date is required' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: existingRows } = await client.query('SELECT * FROM reservations WHERE id = $1 FOR UPDATE', [id]);
+    if (!existingRows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Reservation not found' });
+    }
+    const existing = existingRows[0];
+    if (!['confirmed', 'checked_in'].includes(existing.status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `Cannot change stay dates on a reservation with status '${existing.status}'` });
+    }
+
+    const newCheckIn = check_in_date || existing.check_in_date;
+    if (new Date(check_out_date) <= new Date(newCheckIn)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'check_out_date must be after check_in_date' });
+    }
+
+    // If a room's already assigned, make sure the new date range doesn't collide with
+    // another booking for that same room — same overlap check used everywhere else in the
+    // system, just excluding this reservation itself from the conflict search.
+    if (existing.room_id) {
+      const { rows: conflicts } = await client.query(
+        `SELECT reservation_code FROM reservations
+         WHERE room_id = $1 AND id != $2 AND status IN ('confirmed', 'checked_in')
+           AND check_in_date < $4 AND check_out_date > $3`,
+        [existing.room_id, id, newCheckIn, check_out_date]
+      );
+      if (conflicts.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `Room is already booked for part of that period (conflicts with ${conflicts[0].reservation_code})` });
+      }
+    }
+
+    const oldNights = (new Date(existing.check_out_date) - new Date(existing.check_in_date)) / 86400000;
+    const newNights = (new Date(check_out_date) - new Date(newCheckIn)) / 86400000;
+    const addedNights = newNights - oldNights;
+
+    await client.query(
+      `UPDATE reservations SET check_in_date = $1, check_out_date = $2 WHERE id = $3`,
+      [newCheckIn, check_out_date, id]
+    );
+
+    let chargeAdded = null;
+    if (addedNights > 0) {
+      chargeAdded = addedNights * Number(existing.rate_per_night);
+      await client.query(
+        `INSERT INTO folio_transactions (reservation_id, type, description, amount, recorded_by)
+         VALUES ($1, 'room_charge', $2, $3, $4)`,
+        [id, `Stay extended by ${addedNights} night${addedNights === 1 ? '' : 's'}`, chargeAdded, req.user.username]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      id: Number(id), check_in_date: newCheckIn, check_out_date,
+      nights_added: addedNights, charge_added: chargeAdded,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Failed to change stay dates' });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
