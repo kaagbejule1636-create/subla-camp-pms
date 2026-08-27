@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT res.id, res.reservation_code, res.status, res.check_in_date, res.check_out_date,
-              res.adults, res.children, res.rate_per_night,
+              res.adults, res.children, res.rate_per_night, res.room_type_id,
               g.full_name AS guest_name, g.phone,
               rt.name AS room_type, rm.room_number
        FROM reservations res

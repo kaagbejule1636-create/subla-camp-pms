@@ -1454,7 +1454,7 @@
           <thead><tr><th>Guest</th><th>Room</th><th>Room Type</th><th>Check-in</th><th>Check-out</th><th>Status</th></tr></thead>
           <tbody>
             ${reservations.map((r) => `
-              <tr>
+              <tr style="cursor:pointer;" data-res-row="${r.id}">
                 <td>${escapeHtml(r.guest_name)}<br><span style="color:var(--ink-soft); font-size:11.5px;">${escapeHtml(r.reservation_code)}</span></td>
                 <td>${r.room_number ? escapeHtml(r.room_number) : '<span style="color:var(--ink-soft);">Not assigned</span>'}</td>
                 <td>${escapeHtml(r.room_type)}</td>
@@ -1473,8 +1473,131 @@
           document.getElementById('rv-status').value
         );
       });
+      container.querySelectorAll('[data-res-row]').forEach((row) => {
+        const match = reservations.find((r) => r.id === Number(row.dataset.resRow));
+        row.addEventListener('click', () => openReservationDetailModal(match, () => loadReservationsView(customStart, customEnd, customStatus)));
+      });
     } catch (err) {
       container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load reservations.')}</div>`;
+    }
+  }
+
+  // Opens on clicking any row in the Reservations list. What's actionable depends on
+  // status: an unassigned advance booking gets a room-assignment picker (only rooms of the
+  // right type that are actually free for those exact dates, reusing the same availability
+  // endpoint the rest of the system already relies on); anything not yet checked out can
+  // have its dates changed in place; anything not yet arrived can be cancelled.
+  async function openReservationDetailModal(reservation, onSuccess) {
+    const isConfirmed = reservation.status === 'confirmed';
+    const isActive = ['confirmed', 'checked_in'].includes(reservation.status);
+
+    openModal(`
+      <div class="modal-head">
+        <div><h2>${escapeHtml(reservation.guest_name)}</h2><p>${escapeHtml(reservation.reservation_code)}</p></div>
+        <button class="modal-close" id="rd-close">&times;</button>
+      </div>
+      <div class="folio-line"><span>Room type</span><span>${escapeHtml(reservation.room_type)}</span></div>
+      <div class="folio-line"><span>Room</span><span>${reservation.room_number ? escapeHtml(reservation.room_number) : 'Not assigned'}</span></div>
+      <div class="folio-line"><span>Check-in</span><span>${new Date(reservation.check_in_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</span></div>
+      <div class="folio-line"><span>Check-out</span><span>${new Date(reservation.check_out_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</span></div>
+      <div class="folio-line"><span>Status</span><span>${escapeHtml(reservation.status.replace('_', ' '))}</span></div>
+      <div class="folio-line total"><span>Rate</span><span>AED ${Number(reservation.rate_per_night).toFixed(2)}/night</span></div>
+
+      ${isConfirmed && !reservation.room_number ? `
+        <p class="section-title" style="margin-top:18px;">Assign a Room</p>
+        <div id="rd-assign-body"><div class="loading" style="padding:16px 0;">Checking availability…</div></div>
+      ` : ''}
+
+      ${isActive ? `
+        <p class="section-title" style="margin-top:18px;">Change Stay</p>
+        <div class="field"><label>New check-out date</label><input type="date" id="rd-stay-checkout" value="${new Date(reservation.check_out_date).toISOString().slice(0, 10)}"></div>
+        <p style="font-size:12px; color:var(--ink-soft); margin:-6px 0 10px;">Extending automatically adds a room charge for the extra nights; shortening does not automatically refund anything.</p>
+        <div id="rd-stay-error" class="modal-error hidden"></div>
+        <button type="button" class="btn btn-ghost" id="rd-stay-save">Save New Dates</button>
+      ` : ''}
+
+      <div id="rd-error" class="modal-error hidden" style="margin-top:16px;"></div>
+      <div id="rd-status" class="modal-status hidden"></div>
+
+      <div class="modal-actions">
+        ${isConfirmed ? `<button type="button" class="btn btn-ghost" style="color:var(--red);" id="rd-cancel-res">Cancel Reservation</button>` : '<div></div>'}
+        <button type="button" class="btn btn-primary" id="rd-done">Close</button>
+      </div>
+    `);
+
+    document.getElementById('rd-close').addEventListener('click', closeModal);
+    document.getElementById('rd-done').addEventListener('click', closeModal);
+
+    if (isConfirmed && !reservation.room_number) {
+      try {
+        const available = await apiFetch(`/api/rooms/available?room_type_id=${reservation.room_type_id || ''}&check_in=${reservation.check_in_date}&check_out=${reservation.check_out_date}`);
+        const body = document.getElementById('rd-assign-body');
+        if (!available.length) {
+          body.innerHTML = `<p style="font-size:13px; color:var(--ink-soft);">No rooms of this type are free for these exact dates.</p>`;
+        } else {
+          body.innerHTML = `
+            <div class="field"><label>Available rooms</label>
+              <select id="rd-room-select">${available.map((r) => `<option value="${r.id}">${escapeHtml(r.room_number)}</option>`).join('')}</select>
+            </div>
+            <button type="button" class="btn btn-ghost" id="rd-assign-btn">Assign Room</button>
+          `;
+          document.getElementById('rd-assign-btn').addEventListener('click', async () => {
+            const errorBox = document.getElementById('rd-error');
+            errorBox.classList.add('hidden');
+            try {
+              await apiFetch(`/api/reservations/${reservation.id}/assign-room`, {
+                method: 'PATCH',
+                body: JSON.stringify({ room_id: document.getElementById('rd-room-select').value }),
+              });
+              closeModal();
+              onSuccess();
+            } catch (err) {
+              errorBox.textContent = err.message || 'Failed to assign room.';
+              errorBox.classList.remove('hidden');
+            }
+          });
+        }
+      } catch (err) {
+        document.getElementById('rd-assign-body').innerHTML = `<p style="font-size:13px; color:var(--red);">${escapeHtml(err.message || 'Failed to check availability.')}</p>`;
+      }
+    }
+
+    const stayBtn = document.getElementById('rd-stay-save');
+    if (stayBtn) {
+      stayBtn.addEventListener('click', async () => {
+        const errorBox = document.getElementById('rd-stay-error');
+        errorBox.classList.add('hidden');
+        const newCheckout = document.getElementById('rd-stay-checkout').value;
+        try {
+          const result = await apiFetch(`/api/reservations/${reservation.id}/stay`, {
+            method: 'PATCH',
+            body: JSON.stringify({ check_out_date: newCheckout }),
+          });
+          closeModal();
+          onSuccess();
+          if (result.charge_added) {
+            alert(`Stay updated. AED ${result.charge_added.toFixed(2)} added for ${result.nights_added} extra night(s).`);
+          }
+        } catch (err) {
+          errorBox.textContent = err.message || 'Failed to change stay dates.';
+          errorBox.classList.remove('hidden');
+        }
+      });
+    }
+
+    const cancelBtn = document.getElementById('rd-cancel-res');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', async () => {
+        if (!confirm(`Cancel reservation ${reservation.reservation_code} for ${reservation.guest_name}?`)) return;
+        try {
+          await apiFetch(`/api/reservations/${reservation.id}/cancel`, { method: 'PATCH' });
+          closeModal();
+          onSuccess();
+        } catch (err) {
+          document.getElementById('rd-error').textContent = err.message || 'Failed to cancel reservation.';
+          document.getElementById('rd-error').classList.remove('hidden');
+        }
+      });
     }
   }
 
