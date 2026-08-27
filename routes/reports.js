@@ -295,4 +295,177 @@ router.get('/cashbook/print', async (req, res) => {
   }
 });
 
+// GET /api/reports/daily?date=2026-08-25 (defaults to today) — a single combined report
+// covering Occupancy, Front Office, and Housekeeping for one day, meant to be run and
+// printed as a daily manager's report rather than analyzed over a range. "Expected
+// arrivals/departures" only make sense for a specific day, which is why this is date-based
+// rather than a start/end range like the other reports.
+//
+// Shared by the JSON endpoint and the PDF, so both always show the same numbers.
+async function buildDailyReport(date) {
+  const { rows: totalRoomsRow } = await pool.query('SELECT COUNT(*) FROM rooms');
+  const totalRooms = Number(totalRoomsRow[0].count);
+
+  // Rooms actually sold on this date — reservations overlapping the date, not just today's
+  // live occupancy_status, so this works correctly for a past date too.
+  const { rows: soldRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations
+     WHERE status IN ('checked_in', 'checked_out')
+       AND check_in_date <= $1 AND check_out_date > $1`,
+    [date]
+  );
+  const roomsSold = Number(soldRows[0].count);
+
+  const { rows: expArrRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations WHERE check_in_date = $1 AND status = 'confirmed'`, [date]
+  );
+  const { rows: expDepRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations WHERE check_out_date = $1 AND status = 'checked_in'`, [date]
+  );
+
+  // Front Office counts what actually happened that day, distinct from the Occupancy
+  // section's "expected" (forward-looking, not-yet-actioned) counts above.
+  const { rows: arrRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations WHERE check_in_date = $1 AND status IN ('checked_in', 'checked_out')`, [date]
+  );
+  const { rows: depRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations WHERE check_out_date = $1 AND status = 'checked_out'`, [date]
+  );
+  const { rows: noShowRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations WHERE check_in_date = $1 AND status = 'no_show'`, [date]
+  );
+  const { rows: cancelRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations WHERE check_in_date = $1 AND status = 'cancelled'`, [date]
+  );
+  const { rows: inHouseRows } = await pool.query(
+    `SELECT COUNT(*) FROM reservations
+     WHERE status = 'checked_in' AND check_in_date <= $1 AND check_out_date > $1`,
+    [date]
+  );
+
+  // Housekeeping is always a live snapshot — there's no historical point-in-time record of
+  // housekeeping status, so this reflects current state regardless of which date was picked.
+  const { rows: hkRows } = await pool.query(
+    `SELECT r.room_number, rt.name AS room_type, r.housekeeping_status
+     FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id ORDER BY rt.name, r.room_number`
+  );
+  const cleanCount = hkRows.filter((r) => r.housekeeping_status === 'clean').length;
+  const dirtyCount = hkRows.filter((r) => r.housekeeping_status === 'dirty').length;
+  const oooCount = hkRows.filter((r) => r.housekeeping_status === 'out_of_order').length;
+
+  return {
+    date,
+    occupancy: {
+      occupancy_percentage: totalRooms > 0 ? Math.round((roomsSold / totalRooms) * 1000) / 10 : 0,
+      rooms_sold: roomsSold,
+      available_rooms: totalRooms - roomsSold,
+      total_rooms: totalRooms,
+      expected_arrivals: Number(expArrRows[0].count),
+      expected_departures: Number(expDepRows[0].count),
+    },
+    front_office: {
+      arrivals: Number(arrRows[0].count),
+      departures: Number(depRows[0].count),
+      no_shows: Number(noShowRows[0].count),
+      cancellations: Number(cancelRows[0].count),
+      in_house_guests: Number(inHouseRows[0].count),
+    },
+    housekeeping: {
+      clean: cleanCount,
+      dirty: dirtyCount,
+      out_of_order: oooCount,
+      rooms: hkRows,
+    },
+  };
+}
+
+router.get('/daily', async (req, res) => {
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    res.json(await buildDailyReport(date));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to build daily report' });
+  }
+});
+
+// GET /api/reports/daily/print?date= — printable PDF version of the same report.
+router.get('/daily/print', async (req, res) => {
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    const rpt = await buildDailyReport(date);
+
+    const doc = new PDFDocument({ margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Disposition', `inline; filename=daily-report-${date}.pdf`);
+    doc.pipe(res);
+
+    drawLetterhead(doc, 'Reports & Analytics');
+    doc.fontSize(10).fillColor('#555').text(`Date: ${new Date(date).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`);
+    doc.fillColor('#000');
+    doc.moveDown();
+
+    const section = (title) => {
+      doc.fontSize(13).fillColor('#000').text(title, { underline: true });
+      doc.moveDown(0.3);
+    };
+    const statRow = (label, value) => {
+      doc.fontSize(10).fillColor('#555').text(label, 50, doc.y, { continued: false, width: 260 });
+      doc.fillColor('#000').text(String(value), 320, doc.y - doc.currentLineHeight());
+      doc.x = 50;
+      doc.moveDown(0.35);
+    };
+
+    section('Occupancy');
+    statRow('Occupancy percentage', `${rpt.occupancy.occupancy_percentage}%`);
+    statRow('Rooms sold', rpt.occupancy.rooms_sold);
+    statRow('Available rooms', rpt.occupancy.available_rooms);
+    statRow('Expected arrivals', rpt.occupancy.expected_arrivals);
+    statRow('Expected departures', rpt.occupancy.expected_departures);
+    doc.moveDown(0.5);
+
+    section('Front Office');
+    statRow('Arrivals', rpt.front_office.arrivals);
+    statRow('Departures', rpt.front_office.departures);
+    statRow('No-shows', rpt.front_office.no_shows);
+    statRow('Cancellations', rpt.front_office.cancellations);
+    statRow('In-house guests', rpt.front_office.in_house_guests);
+    doc.moveDown(0.5);
+
+    section('Housekeeping');
+    statRow('Clean rooms', rpt.housekeeping.clean);
+    statRow('Dirty rooms', rpt.housekeeping.dirty);
+    statRow('Out of order', rpt.housekeeping.out_of_order);
+    doc.moveDown(0.3);
+
+    const colX = { room: 50, type: 200, status: 380 };
+    doc.fontSize(9).fillColor('#555');
+    doc.text('Room', colX.room, doc.y);
+    doc.text('Type', colX.type, doc.y - doc.currentLineHeight());
+    doc.text('Status', colX.status, doc.y - doc.currentLineHeight());
+    doc.x = 50;
+    doc.moveDown(0.3);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(0.3);
+
+    doc.fontSize(9).fillColor('#000');
+    rpt.housekeeping.rooms.forEach((r) => {
+      const rowY = doc.y;
+      const color = r.housekeeping_status === 'dirty' ? '#C1392B' : r.housekeeping_status === 'out_of_order' ? '#B8933A' : '#5C8A5A';
+      doc.fillColor('#000').text(r.room_number, colX.room, rowY);
+      doc.text(r.room_type, colX.type, rowY);
+      doc.fillColor(color).text(r.housekeeping_status, colX.status, rowY);
+      doc.moveDown(0.4);
+    });
+    doc.x = 50;
+    doc.fillColor('#000');
+
+    doc.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate daily report PDF' });
+  }
+});
+
 module.exports = router;

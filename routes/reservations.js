@@ -67,13 +67,16 @@ router.post('/', async (req, res) => {
     }
     if (!guestId) {
       const { rows: created } = await client.query(
-        `INSERT INTO guests (full_name, phone, email, nationality, id_type, id_number)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, do_not_rent`,
-        [guest.full_name, guest.phone, guest.email, guest.nationality, guest.id_type, guest.id_number]
+        `INSERT INTO guests (full_name, phone, email, nationality, date_of_birth, place_of_birth, id_type, id_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, do_not_rent`,
+        [
+          guest.full_name, guest.phone, guest.email, guest.nationality,
+          guest.date_of_birth || null, guest.place_of_birth || null, guest.id_type, guest.id_number,
+        ]
       );
       guestId = created[0].id;
-    } else if (guest.id_type || guest.id_number || guest.nationality) {
-      // Returning guest — fill in any ID/nationality fields that weren't captured before.
+    } else if (guest.id_type || guest.id_number || guest.nationality || guest.date_of_birth || guest.place_of_birth) {
+      // Returning guest — fill in any ID/personal details that weren't captured before.
       // Only fills gaps, never overwrites what's already on file (COALESCE keeps the
       // existing value whenever the new one is null), so a repeat visit can't accidentally
       // clobber a correct ID with a blank or mistyped one.
@@ -81,9 +84,14 @@ router.post('/', async (req, res) => {
         `UPDATE guests SET
            id_type = COALESCE(id_type, $1),
            id_number = COALESCE(id_number, $2),
-           nationality = COALESCE(nationality, $3)
-         WHERE id = $4`,
-        [guest.id_type || null, guest.id_number || null, guest.nationality || null, guestId]
+           nationality = COALESCE(nationality, $3),
+           date_of_birth = COALESCE(date_of_birth, $4),
+           place_of_birth = COALESCE(place_of_birth, $5)
+         WHERE id = $6`,
+        [
+          guest.id_type || null, guest.id_number || null, guest.nationality || null,
+          guest.date_of_birth || null, guest.place_of_birth || null, guestId,
+        ]
       );
     }
 
@@ -166,11 +174,26 @@ router.get('/dashboard', async (req, res) => {
     const { rows: dirty } = await pool.query(
       `SELECT COUNT(*) FROM rooms WHERE housekeeping_status = 'dirty'`
     );
+    const { rows: outOfOrder } = await pool.query(
+      `SELECT COUNT(*) FROM rooms WHERE housekeeping_status = 'out_of_order'`
+    );
+    // Guests whose checkout date has already passed but were never actually checked out.
+    // This is deliberately separate from "expected departures" (which is today's checkouts,
+    // and already updates on its own at midnight since it's driven by CURRENT_DATE) — these
+    // are stuck reservations that need staff to actually go complete the checkout, not a
+    // status the system silently flips on its own. Auto-completing a checkout would skip
+    // balance settlement and could quietly lose track of money still owed, so this stays a
+    // visible prompt rather than an automatic action.
+    const { rows: overdue } = await pool.query(
+      `SELECT COUNT(*) FROM reservations WHERE status = 'checked_in' AND check_out_date < CURRENT_DATE`
+    );
     res.json({
       expected_arrivals: Number(arrivals[0].count),
       expected_departures: Number(departures[0].count),
       in_house_guests: Number(inHouse[0].count),
       rooms_to_clean: Number(dirty[0].count),
+      rooms_out_of_order: Number(outOfOrder[0].count),
+      overdue_departures: Number(overdue[0].count),
     });
   } catch (err) {
     console.error(err);

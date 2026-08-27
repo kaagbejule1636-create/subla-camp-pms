@@ -27,6 +27,8 @@ CREATE TABLE guests (
   phone         TEXT,
   email         TEXT,
   nationality   TEXT,
+  date_of_birth DATE,
+  place_of_birth TEXT,
   id_type       TEXT,                        -- 'passport', 'emirates_id', etc.
   id_number     TEXT,
   do_not_rent   BOOLEAN NOT NULL DEFAULT FALSE,
@@ -281,3 +283,13 @@ CREATE TABLE expenses (
 );
 
 CREATE INDEX idx_expenses_date ON expenses(expense_date, category);
+
+-- Simple key-value store for editable property settings — starting with terms & conditions,
+-- which used to be hardcoded text in services/pdf-letterhead.js and required a code deploy
+-- to change. Generic enough to hold future editable settings without a new table each time.
+CREATE TABLE settings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  updated_by  TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

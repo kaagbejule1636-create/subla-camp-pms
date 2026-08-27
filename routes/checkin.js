@@ -173,7 +173,7 @@ router.get('/:reservationId/registration-card', async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT res.*, rt.name AS room_type, rm.room_number, g.full_name, g.phone, g.email,
-              g.nationality, g.id_type, g.id_number
+              g.nationality, g.date_of_birth, g.place_of_birth, g.id_type, g.id_number
        FROM reservations res
        JOIN room_types rt ON rt.id = res.room_type_id
        JOIN guests g ON g.id = res.guest_id
@@ -186,6 +186,7 @@ router.get('/:reservationId/registration-card', async (req, res) => {
 
     const doc = new PDFDocument({ margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename=registration-${r.reservation_code}.pdf`);
     doc.pipe(res);
 
@@ -196,43 +197,61 @@ router.get('/:reservationId/registration-card', async (req, res) => {
     doc.text(`Printed: ${new Date().toLocaleString()}`);
     doc.moveDown();
 
+    // Guest details as an actual two-column table rather than a flat list — easier to
+    // scan, and reads like a proper registration form.
     doc.fontSize(12).text('Guest Details', { underline: true });
-    doc.fontSize(11);
-    doc.text(`Name: ${r.full_name}`);
-    if (r.phone) doc.text(`Phone: ${r.phone}`);
-    if (r.email) doc.text(`Email: ${r.email}`);
-    if (r.nationality) doc.text(`Nationality: ${r.nationality}`);
-    if (r.id_type || r.id_number) doc.text(`ID: ${r.id_type || ''} ${r.id_number || ''}`.trim());
-    doc.moveDown();
+    doc.moveDown(0.3);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(0.4);
+
+    const leftX = 50, rightX = 300;
+    const guestFields = [
+      ['Full Name', r.full_name, 'Phone', r.phone || '—'],
+      ['Email', r.email || '—', 'Nationality', r.nationality || '—'],
+      ['Date of Birth', r.date_of_birth ? new Date(r.date_of_birth).toLocaleDateString() : '—', 'Place of Birth', r.place_of_birth || '—'],
+      ['ID Type', r.id_type || '—', 'ID Number', r.id_number || '—'],
+    ];
+    doc.fontSize(10);
+    guestFields.forEach(([labelL, valL, labelR, valR]) => {
+      const rowY = doc.y;
+      doc.fillColor('#555').text(labelL, leftX, rowY);
+      doc.fillColor('#000').text(valL, leftX, rowY + 13, { width: 230 });
+      doc.fillColor('#555').text(labelR, rightX, rowY);
+      doc.fillColor('#000').text(valR, rightX, rowY + 13, { width: 230 });
+      doc.x = leftX;
+      doc.y = rowY + 32;
+    });
+    doc.fillColor('#000');
+    doc.moveDown(0.5);
 
     doc.fontSize(12).text('Stay Details', { underline: true });
-    doc.fontSize(11);
-    doc.text(`Room: ${r.room_number || 'Not yet assigned'} (${r.room_type})`);
-    doc.text(`Check-in: ${new Date(r.check_in_date).toLocaleDateString()}`);
-    doc.text(`Check-out: ${new Date(r.check_out_date).toLocaleDateString()}`);
-    doc.text(`Adults: ${r.adults}   Children: ${r.children}`);
-    doc.text(`Rate: AED ${Number(r.rate_per_night).toFixed(2)}/night`);
-    if (r.special_requests) doc.text(`Special requests: ${r.special_requests}`);
-    doc.moveDown(2);
+    doc.moveDown(0.3);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(0.4);
 
-    doc.fontSize(9).fillColor('#555').text(
-      'By signing below, I confirm the details above are correct and agree to the terms and conditions of my stay.'
-    );
-    doc.moveDown(2.5);
-    const sigY = doc.y;
-    doc.moveTo(50, sigY).lineTo(250, sigY).stroke();
-    doc.moveTo(300, sigY).lineTo(500, sigY).stroke();
-    doc.fontSize(9).text('Guest signature', 50, sigY + 4);
-    doc.text(`Staff signature${req.user?.full_name ? ` — ${req.user.full_name}` : ''}`, 300, sigY + 4);
-
-    const dateY = sigY + 40;
-    doc.moveTo(50, dateY).lineTo(250, dateY).stroke();
-    doc.text('Date', 50, dateY + 4);
-
-    // Explicit-coordinate text() calls above don't reset the cursor for what follows,
-    // so the next section has to be positioned explicitly back at the left margin.
-    doc.x = 50;
-    doc.y = dateY + 24;
+    const stayFields = [
+      ['Room', `${r.room_number || 'Not yet assigned'} (${r.room_type})`, 'Rate', `AED ${Number(r.rate_per_night).toFixed(2)}/night`],
+      ['Check-in', new Date(r.check_in_date).toLocaleDateString(), 'Check-out', new Date(r.check_out_date).toLocaleDateString()],
+      ['Adults', String(r.adults), 'Children', String(r.children)],
+    ];
+    doc.fontSize(10);
+    stayFields.forEach(([labelL, valL, labelR, valR]) => {
+      const rowY = doc.y;
+      doc.fillColor('#555').text(labelL, leftX, rowY);
+      doc.fillColor('#000').text(valL, leftX, rowY + 13, { width: 230 });
+      doc.fillColor('#555').text(labelR, rightX, rowY);
+      doc.fillColor('#000').text(valR, rightX, rowY + 13, { width: 230 });
+      doc.x = leftX;
+      doc.y = rowY + 32;
+    });
+    doc.fillColor('#000');
+    if (r.special_requests) {
+      doc.fontSize(10).fillColor('#555').text('Special requests', leftX, doc.y);
+      doc.fillColor('#000').text(r.special_requests, leftX, doc.y + 13, { width: 495 });
+      doc.x = leftX;
+    }
+    doc.fillColor('#000');
+    doc.moveDown();
 
     drawTermsAndConditions(doc, (await pool.query(`SELECT value FROM settings WHERE key = 'terms_and_conditions'`)).rows[0]?.value);
 

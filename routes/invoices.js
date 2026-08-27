@@ -37,6 +37,7 @@ router.get('/:reservationId', async (req, res) => {
     // --- Build the PDF ---
     const doc = new PDFDocument({ margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename=invoice-${r.reservation_code}.pdf`);
     doc.pipe(res);
 

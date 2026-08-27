@@ -27,11 +27,14 @@ router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT r.id, r.room_number, r.housekeeping_status, r.occupancy_status, r.notes,
-              rt.id AS room_type_id, rt.name AS room_type, rt.base_rate
+              rt.id AS room_type_id, rt.name AS room_type, rt.base_rate,
+              g.full_name AS guest_name, res.id AS reservation_id
        FROM rooms r
        JOIN room_types rt ON rt.id = r.room_type_id
+       LEFT JOIN reservations res ON res.room_id = r.id AND res.status = 'checked_in'
+       LEFT JOIN guests g ON g.id = res.guest_id
        ${where}
-       ORDER BY r.room_number`,
+       ORDER BY rt.name, r.room_number`,
       values
     );
     res.json(rows);

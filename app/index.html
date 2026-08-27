@@ -254,6 +254,7 @@
   .room-tag.occupied .room-status{ color:var(--ink-soft); }
   .room-tag.out_of_order .room-status{ color:#9C7A22; }
   .room-rate{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-soft); margin-top:6px; }
+  .room-guest{ font-size:12.5px; font-weight:600; color:var(--ink); margin-top:4px; }
   .clean-icon{ font-size:13px; line-height:1; }
 
   .loading, .error-box{
@@ -370,6 +371,7 @@
       <button class="tab-btn" data-view="inventory">Inventory</button>
       <button class="tab-btn hidden" id="tab-expenses" data-view="expenses">Expenses</button>
       <button class="tab-btn hidden" id="tab-cashbook" data-view="cashbook">Cashbook</button>
+      <button class="tab-btn hidden" id="tab-reports" data-view="reports">Reports</button>
     </div>
 
     <div id="view-dashboard">
@@ -400,6 +402,17 @@
             <div class="label">Rooms to clean</div>
             <div class="value" id="stat-dirty">—</div>
           </div>
+          <div class="stat-card">
+            <div class="label">Out of order</div>
+            <div class="value" id="stat-ooo">—</div>
+          </div>
+          <div class="stat-card" id="stat-overdue-card">
+            <div class="label">Overdue departures</div>
+            <div class="value" id="stat-overdue">—</div>
+          </div>
+        </div>
+        <div id="overdue-banner" class="hidden" style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin:-6px 0 18px;">
+          Some guests are past their checkout date and haven't been checked out yet — find them via their room's checkout screen.
         </div>
 
         <p class="section-title">Room status</p>
@@ -411,6 +424,7 @@
     <div id="view-inventory" class="wrap hidden"></div>
     <div id="view-expenses" class="wrap hidden"></div>
     <div id="view-cashbook" class="wrap hidden"></div>
+    <div id="view-reports" class="wrap hidden"></div>
   </div>
 
   <!-- ============ MODAL (check-in / check-out) ============ -->
@@ -473,13 +487,14 @@
     const role = user?.role;
     document.getElementById('tab-expenses').classList.toggle('hidden', !(role === 'manager' || role === 'supervisor'));
     document.getElementById('tab-cashbook').classList.toggle('hidden', role !== 'manager');
+    document.getElementById('tab-reports').classList.toggle('hidden', role !== 'manager');
     updateTodayDate();
     startTodayDateAutoRefresh();
     switchView('dashboard');
   }
 
   // -------- Tab navigation --------
-  const VIEWS = ['dashboard', 'inventory', 'expenses', 'cashbook'];
+  const VIEWS = ['dashboard', 'inventory', 'expenses', 'cashbook', 'reports'];
   function switchView(name) {
     VIEWS.forEach((v) => {
       document.getElementById(`view-${v}`).classList.toggle('hidden', v !== name);
@@ -491,6 +506,7 @@
     else if (name === 'inventory') loadInventoryView();
     else if (name === 'expenses') loadExpensesView();
     else if (name === 'cashbook') loadCashbookView();
+    else if (name === 'reports') loadReportsView();
   }
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
@@ -578,11 +594,27 @@
       document.getElementById('stat-departures').textContent = stats.expected_departures;
       document.getElementById('stat-inhouse').textContent = stats.in_house_guests;
       document.getElementById('stat-dirty').textContent = stats.rooms_to_clean;
+      document.getElementById('stat-ooo').textContent = stats.rooms_out_of_order;
+      document.getElementById('stat-overdue').textContent = stats.overdue_departures;
+      const overdueCard = document.getElementById('stat-overdue-card');
+      const overdueBanner = document.getElementById('overdue-banner');
+      const hasOverdue = stats.overdue_departures > 0;
+      overdueCard.style.borderColor = hasOverdue ? 'var(--red)' : '';
+      document.getElementById('stat-overdue').style.color = hasOverdue ? 'var(--red)' : '';
+      overdueBanner.classList.toggle('hidden', !hasOverdue);
 
       const grid = document.getElementById('room-grid');
       grid.innerHTML = '';
       rooms
-        .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }))
+        // Group by room type first (matches the backend's own ORDER BY), then sort
+        // numerically within each type by whatever digits are in the room number —
+        // plain alphabetical sort would put "Unit 10" before "Unit 2", which looks wrong.
+        .sort((a, b) => {
+          if (a.room_type !== b.room_type) return a.room_type.localeCompare(b.room_type);
+          const numA = parseInt(a.room_number.replace(/\D/g, ''), 10) || 0;
+          const numB = parseInt(b.room_number.replace(/\D/g, ''), 10) || 0;
+          return numA - numB;
+        })
         .forEach((room) => {
           const isDirty = room.housekeeping_status === 'dirty';
           const isOutOfOrder = room.housekeeping_status === 'out_of_order';
@@ -599,6 +631,7 @@
             <div class="room-num">${escapeHtml(room.room_number)}</div>
             <div class="room-type">${escapeHtml(room.room_type)}</div>
             <div class="room-status">${cleanIcon}${statusText}</div>
+            ${isOccupied && room.guest_name ? `<div class="room-guest">${escapeHtml(room.guest_name)}</div>` : ''}
             <div class="room-rate">AED ${Number(room.base_rate).toFixed(0)}/night</div>
           `;
 
@@ -732,6 +765,20 @@
           </div>
         </div>
         <div class="field-row">
+          <div class="field">
+            <label>Nationality</label>
+            <input type="text" id="ci-nationality" placeholder="e.g. UAE">
+          </div>
+          <div class="field">
+            <label>Date of birth</label>
+            <input type="date" id="ci-dob">
+          </div>
+        </div>
+        <div class="field">
+          <label>Place of birth</label>
+          <input type="text" id="ci-pob" placeholder="e.g. Dubai, UAE">
+        </div>
+        <div class="field-row">
           <div class="field required">
             <label>Check-in date</label>
             <input type="date" id="ci-checkin" value="${defaultCheckIn}" required>
@@ -793,6 +840,9 @@
       phone: document.getElementById('ci-phone').value.trim() || undefined,
       id_type: document.getElementById('ci-id-type').value || undefined,
       id_number: document.getElementById('ci-id-number').value.trim() || undefined,
+      nationality: document.getElementById('ci-nationality').value.trim() || undefined,
+      date_of_birth: document.getElementById('ci-dob').value || undefined,
+      place_of_birth: document.getElementById('ci-pob').value.trim() || undefined,
     };
     const check_in_date = document.getElementById('ci-checkin').value;
     const check_out_date = document.getElementById('ci-checkout').value;
@@ -1553,6 +1603,69 @@
       });
     } catch (err) {
       container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load cashbook.')}</div>`;
+    }
+  }
+
+  // -------- Reports & Analytics view (manager-only, matches backend gating) --------
+  async function loadReportsView(customDate) {
+    const container = document.getElementById('view-reports');
+    const date = customDate || todayISO();
+    container.innerHTML = `<div class="loading">Loading report…</div>`;
+
+    try {
+      const rpt = await apiFetch(`/api/reports/daily?date=${date}`);
+      container.innerHTML = `
+        <div class="page-head"><h1>Reports &amp; Analytics</h1><p>Occupancy, Front Office, and Housekeeping for one day.</p></div>
+        <div class="toolbar">
+          <div class="toolbar-filters">
+            <div class="field"><label>Date</label><input type="date" id="rpt-date" value="${date}"></div>
+            <button class="btn btn-ghost" id="rpt-filter-btn" style="height:38px;">Apply</button>
+          </div>
+          <a class="btn btn-primary" href="${API_BASE}/api/reports/daily/print?date=${date}&token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print Report</a>
+        </div>
+
+        <p class="section-title">Occupancy</p>
+        <div class="summary-row">
+          <div class="summary-pill"><div class="label">Occupancy %</div><div class="value">${rpt.occupancy.occupancy_percentage}%</div></div>
+          <div class="summary-pill"><div class="label">Rooms Sold</div><div class="value">${rpt.occupancy.rooms_sold}</div></div>
+          <div class="summary-pill"><div class="label">Available</div><div class="value">${rpt.occupancy.available_rooms}</div></div>
+          <div class="summary-pill"><div class="label">Exp. Arrivals</div><div class="value">${rpt.occupancy.expected_arrivals}</div></div>
+          <div class="summary-pill"><div class="label">Exp. Departures</div><div class="value">${rpt.occupancy.expected_departures}</div></div>
+        </div>
+
+        <p class="section-title">Front Office</p>
+        <div class="summary-row">
+          <div class="summary-pill"><div class="label">Arrivals</div><div class="value">${rpt.front_office.arrivals}</div></div>
+          <div class="summary-pill"><div class="label">Departures</div><div class="value">${rpt.front_office.departures}</div></div>
+          <div class="summary-pill"><div class="label">No-Shows</div><div class="value">${rpt.front_office.no_shows}</div></div>
+          <div class="summary-pill"><div class="label">Cancellations</div><div class="value">${rpt.front_office.cancellations}</div></div>
+          <div class="summary-pill"><div class="label">In-House</div><div class="value">${rpt.front_office.in_house_guests}</div></div>
+        </div>
+
+        <p class="section-title">Housekeeping</p>
+        <div class="summary-row">
+          <div class="summary-pill"><div class="label">Clean</div><div class="value amt-in">${rpt.housekeeping.clean}</div></div>
+          <div class="summary-pill"><div class="label">Dirty</div><div class="value amt-out">${rpt.housekeeping.dirty}</div></div>
+          <div class="summary-pill"><div class="label">Out of Order</div><div class="value">${rpt.housekeeping.out_of_order}</div></div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Room</th><th>Type</th><th>Status</th></tr></thead>
+          <tbody>
+            ${rpt.housekeeping.rooms.map((r) => `
+              <tr>
+                <td>${escapeHtml(r.room_number)}</td>
+                <td>${escapeHtml(r.room_type)}</td>
+                <td class="${r.housekeeping_status === 'dirty' ? 'amt-out' : r.housekeeping_status === 'clean' ? 'amt-in' : ''}">${escapeHtml(r.housekeeping_status)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+      document.getElementById('rpt-filter-btn').addEventListener('click', () => {
+        loadReportsView(document.getElementById('rpt-date').value);
+      });
+    } catch (err) {
+      container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load report.')}</div>`;
     }
   }
 

@@ -212,6 +212,7 @@ router.get('/:reservationId/gate-pass', async (req, res) => {
 
     const doc = new PDFDocument({ margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename=gate-pass-${r.reservation_code}.pdf`);
     doc.pipe(res);
 
