@@ -4,7 +4,7 @@ const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { requireRole } = require('../middleware/auth');
 const { resolvePaymentAmount } = require('../services/currency');
-const { drawLetterhead } = require('../services/pdf-letterhead');
+const { drawLetterhead, formatCalendarDate } = require('../services/pdf-letterhead');
 
 const VALID_CATEGORIES = ['utilities', 'salaries', 'supplies', 'maintenance', 'marketing', 'other'];
 
@@ -121,7 +121,7 @@ router.get('/print', requireRole('supervisor'), async (req, res) => {
     );
     const total = expenseRows.reduce((s, e) => s + Number(e.amount), 0);
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=expenses-${new Date().toISOString().slice(0, 10)}.pdf`);
     doc.pipe(res);
@@ -147,7 +147,7 @@ router.get('/print', requireRole('supervisor'), async (req, res) => {
     doc.fontSize(9.5).fillColor('#000');
     expenseRows.forEach((e) => {
       const rowY = doc.y;
-      doc.text(new Date(e.expense_date).toLocaleDateString(), colX.date, rowY);
+      doc.text(formatCalendarDate(e.expense_date), colX.date, rowY);
       doc.text(e.category, colX.category, rowY, { width: 95 });
       doc.text(e.description, colX.desc, rowY, { width: 145 });
       doc.text(e.vendor || '—', colX.vendor, rowY, { width: 95 });

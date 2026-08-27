@@ -3,7 +3,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { requireRole } = require('../middleware/auth');
-const { drawLetterhead } = require('../services/pdf-letterhead');
+const { drawLetterhead, formatDubaiDateTime } = require('../services/pdf-letterhead');
 
 // GET /api/inventory/items — list item types
 router.get('/items', async (req, res) => {
@@ -81,13 +81,13 @@ router.get('/print', async (req, res) => {
   try {
     const { rows: items } = await pool.query('SELECT * FROM inventory_items WHERE active = TRUE ORDER BY category, name');
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=inventory-${new Date().toISOString().slice(0, 10)}.pdf`);
     doc.pipe(res);
 
     drawLetterhead(doc, 'Inventory');
-    doc.fontSize(10).fillColor('#555').text(`Generated: ${new Date().toLocaleString()}`);
+    doc.fontSize(10).fillColor('#555').text(`Generated: ${formatDubaiDateTime(new Date())}`);
     doc.fillColor('#000');
     doc.moveDown();
 

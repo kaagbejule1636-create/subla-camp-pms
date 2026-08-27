@@ -7,6 +7,37 @@ const LOGO_ASPECT_RATIO = 675 / 1176; // actual logo file dimensions: 1176x675px
 
 const PROPERTY_NAME = 'Subla Camp';
 const PROPERTY_ADDRESS = 'Near Masfout Adventure Park, Masfout, Ajman, UAE';
+const PROPERTY_TIMEZONE = 'Asia/Dubai';
+
+// The server this runs on isn't necessarily in the UAE — Render can run it in any region,
+// and its system clock is very likely UTC. Every date/time shown on a printed document
+// needs to read correctly against Dubai wall-clock time regardless of where the server
+// itself physically sits, so every route uses these two helpers instead of calling
+// toLocaleString()/toLocaleDateString() directly.
+//
+// formatDubaiDateTime — for an actual moment in time (when a document was printed, when
+// a guest departed): forces Asia/Dubai so the clock time shown is correct.
+function formatDubaiDateTime(date) {
+  return new Date(date).toLocaleString(undefined, { timeZone: PROPERTY_TIMEZONE });
+}
+
+// formatCalendarDate — for a pure calendar date with no time-of-day (check-in/check-out
+// dates, date of birth, an expense's date). Postgres returns these as UTC-midnight of
+// that date; forcing UTC on the way back out (rather than the server's local timezone,
+// or nothing at all) guarantees the date shown always matches the date actually stored,
+// instead of silently shifting a day earlier depending on what timezone the server
+// happens to be running in.
+function formatCalendarDate(date, options) {
+  return new Date(date).toLocaleDateString(undefined, { timeZone: 'UTC', ...options });
+}
+
+// formatDubaiDate — the date portion only (no time) of a genuine timestamp (a folio
+// transaction's created_at, for example), shown as whatever calendar date that moment
+// falls on in Dubai — distinct from formatCalendarDate, which is for values that were
+// already a plain date with no time component to begin with.
+function formatDubaiDate(date) {
+  return new Date(date).toLocaleDateString(undefined, { timeZone: PROPERTY_TIMEZONE });
+}
 
 // Draws the logo (or a text fallback if the file's ever missing) plus the property
 // name and address at the current cursor position, and advances doc.y past it —
@@ -59,4 +90,7 @@ function drawTermsAndConditions(doc, termsText) {
   doc.fillColor('#000');
 }
 
-module.exports = { drawLetterhead, drawTermsAndConditions, PROPERTY_NAME, PROPERTY_ADDRESS, DEFAULT_TERMS_AND_CONDITIONS };
+module.exports = {
+  drawLetterhead, drawTermsAndConditions, PROPERTY_NAME, PROPERTY_ADDRESS, DEFAULT_TERMS_AND_CONDITIONS,
+  formatDubaiDateTime, formatCalendarDate, formatDubaiDate, PROPERTY_TIMEZONE,
+};

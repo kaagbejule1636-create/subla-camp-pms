@@ -3,7 +3,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { resolvePaymentAmount } = require('../services/currency');
-const { drawLetterhead } = require('../services/pdf-letterhead');
+const { drawLetterhead, formatDubaiDateTime, formatCalendarDate } = require('../services/pdf-letterhead');
 
 // GET /api/checkout/:reservationId/folio — full bill for review before checkout.
 // Same shape as the check-in folio endpoint (room charges + extras vs payments/deposits/discounts).
@@ -210,7 +210,7 @@ router.get('/:reservationId/gate-pass', async (req, res) => {
       return res.status(409).json({ error: `Reservation is '${r.status}' — a gate pass can only be printed after checkout is confirmed` });
     }
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename=gate-pass-${r.reservation_code}.pdf`);
@@ -229,14 +229,14 @@ router.get('/:reservationId/gate-pass', async (req, res) => {
     doc.fontSize(12).text('Stay', { underline: true });
     doc.fontSize(11);
     doc.text(`Room: ${r.room_number || 'N/A'} (${r.room_type})`);
-    doc.text(`Check-in: ${new Date(r.check_in_date).toLocaleDateString()}`);
-    doc.text(`Check-out: ${new Date(r.check_out_date).toLocaleDateString()}`);
+    doc.text(`Check-in: ${formatCalendarDate(r.check_in_date)}`);
+    doc.text(`Check-out: ${formatCalendarDate(r.check_out_date)}`);
     doc.moveDown();
 
     doc.fontSize(11).fillColor('#2F4B3C').text('Status: Checked out — account settled in full', { underline: false });
     doc.fillColor('#000');
     if (r.checked_out_at) {
-      doc.fontSize(10).fillColor('#555').text(`Departed: ${new Date(r.checked_out_at).toLocaleString()}`);
+      doc.fontSize(10).fillColor('#555').text(`Departed: ${formatDubaiDateTime(r.checked_out_at)}`);
     }
     doc.fillColor('#000');
     doc.moveDown(2);

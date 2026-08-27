@@ -3,7 +3,7 @@ const router = express.Router();
 const PDFDocument = require('pdfkit');
 const pool = require('../db/pool');
 const { sendWhatsAppMessage } = require('../services/whatsapp');
-const { drawLetterhead, drawTermsAndConditions } = require('../services/pdf-letterhead');
+const { drawLetterhead, drawTermsAndConditions, formatDubaiDateTime, formatCalendarDate } = require('../services/pdf-letterhead');
 
 // GET /api/invoices/:reservationId — streams a PDF invoice built from the reservation's folio.
 // Works for any reservation status, but is intended to be called right after checkout.
@@ -35,7 +35,7 @@ router.get('/:reservationId', async (req, res) => {
     const balance = totalCharges - totalCredits;
 
     // --- Build the PDF ---
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename=invoice-${r.reservation_code}.pdf`);
@@ -45,7 +45,7 @@ router.get('/:reservationId', async (req, res) => {
 
     doc.fontSize(11);
     doc.text(`Invoice for reservation ${r.reservation_code}`);
-    doc.text(`Issued: ${new Date().toLocaleDateString()}`);
+    doc.text(`Issued: ${formatCalendarDate(new Date())}`);
     doc.moveDown();
 
     doc.fontSize(12).text('Guest', { underline: true });
@@ -58,8 +58,8 @@ router.get('/:reservationId', async (req, res) => {
     doc.fontSize(12).text('Stay Details', { underline: true });
     doc.fontSize(11);
     doc.text(`Room: ${r.room_number || 'N/A'} (${r.room_type})`);
-    doc.text(`Check-in: ${new Date(r.check_in_date).toLocaleDateString()}`);
-    doc.text(`Check-out: ${new Date(r.check_out_date).toLocaleDateString()}`);
+    doc.text(`Check-in: ${formatCalendarDate(r.check_in_date)}`);
+    doc.text(`Check-out: ${formatCalendarDate(r.check_out_date)}`);
     doc.moveDown();
 
     doc.fontSize(12).text('Charges', { underline: true });
@@ -143,7 +143,7 @@ router.post('/:reservationId/send-whatsapp', async (req, res) => {
       `Subla Camp — Invoice for ${r.reservation_code}\n\n` +
       `Guest: ${r.full_name}\n` +
       `Room: ${r.room_type}\n` +
-      `Stay: ${new Date(r.check_in_date).toLocaleDateString()} – ${new Date(r.check_out_date).toLocaleDateString()}\n\n` +
+      `Stay: ${formatCalendarDate(r.check_in_date)} – ${formatCalendarDate(r.check_out_date)}\n\n` +
       `Total charges: AED ${charges.toFixed(2)}\n` +
       `Total paid: AED ${credits.toFixed(2)}\n` +
       `Balance: AED ${balance.toFixed(2)}\n` +

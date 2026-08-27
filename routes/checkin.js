@@ -3,7 +3,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { resolvePaymentAmount } = require('../services/currency');
-const { drawLetterhead, drawTermsAndConditions } = require('../services/pdf-letterhead');
+const { drawLetterhead, drawTermsAndConditions, formatDubaiDateTime, formatCalendarDate } = require('../services/pdf-letterhead');
 
 // GET /api/checkin/:reservationId/folio — charge summary shown on the Deposit/Payment and Confirm steps
 router.get('/:reservationId/folio', async (req, res) => {
@@ -184,7 +184,7 @@ router.get('/:reservationId/registration-card', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Reservation not found' });
     const r = rows[0];
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename=registration-${r.reservation_code}.pdf`);
@@ -194,7 +194,7 @@ router.get('/:reservationId/registration-card', async (req, res) => {
 
     doc.fontSize(11);
     doc.text(`Reservation: ${r.reservation_code}`);
-    doc.text(`Printed: ${new Date().toLocaleString()}`);
+    doc.text(`Printed: ${formatDubaiDateTime(new Date())}`);
     doc.moveDown();
 
     // Guest details as an actual two-column table rather than a flat list — easier to
@@ -208,7 +208,7 @@ router.get('/:reservationId/registration-card', async (req, res) => {
     const guestFields = [
       ['Full Name', r.full_name, 'Phone', r.phone || '—'],
       ['Email', r.email || '—', 'Nationality', r.nationality || '—'],
-      ['Date of Birth', r.date_of_birth ? new Date(r.date_of_birth).toLocaleDateString() : '—', 'Place of Birth', r.place_of_birth || '—'],
+      ['Date of Birth', r.date_of_birth ? formatCalendarDate(r.date_of_birth) : '—', 'Place of Birth', r.place_of_birth || '—'],
       ['ID Type', r.id_type || '—', 'ID Number', r.id_number || '—'],
     ];
     doc.fontSize(10);
@@ -231,7 +231,7 @@ router.get('/:reservationId/registration-card', async (req, res) => {
 
     const stayFields = [
       ['Room', `${r.room_number || 'Not yet assigned'} (${r.room_type})`, 'Rate', `AED ${Number(r.rate_per_night).toFixed(2)}/night`],
-      ['Check-in', new Date(r.check_in_date).toLocaleDateString(), 'Check-out', new Date(r.check_out_date).toLocaleDateString()],
+      ['Check-in', formatCalendarDate(r.check_in_date), 'Check-out', formatCalendarDate(r.check_out_date)],
       ['Adults', String(r.adults), 'Children', String(r.children)],
     ];
     doc.fontSize(10);

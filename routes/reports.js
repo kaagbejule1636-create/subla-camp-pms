@@ -3,7 +3,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { requireRole } = require('../middleware/auth');
-const { drawLetterhead } = require('../services/pdf-letterhead');
+const { drawLetterhead, formatDubaiDate, formatCalendarDate } = require('../services/pdf-letterhead');
 
 router.use(requireRole('manager'));
 
@@ -241,7 +241,7 @@ router.get('/cashbook/print', async (req, res) => {
   try {
     const cb = await buildCashbook(start, end);
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=cashbook-${start}-to-${end}.pdf`);
     doc.pipe(res);
@@ -274,7 +274,7 @@ router.get('/cashbook/print', async (req, res) => {
     cb.entries.forEach((e) => {
       const rowY = doc.y;
       const desc = e.description + (e.reservation_code ? ` (${e.reservation_code})` : '');
-      doc.fillColor('#000').text(new Date(e.date).toLocaleDateString(), colX.date, rowY);
+      doc.fillColor('#000').text(formatDubaiDate(e.date), colX.date, rowY);
       doc.text(desc, colX.desc, rowY, { width: 180 });
       doc.text(e.source, colX.source, rowY);
       doc.fillColor(e.direction === 'in' ? '#5C8A5A' : '#C1392B')
@@ -395,14 +395,14 @@ router.get('/daily/print', async (req, res) => {
   try {
     const rpt = await buildDailyReport(date);
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename=daily-report-${date}.pdf`);
     doc.pipe(res);
 
     drawLetterhead(doc, 'Reports & Analytics');
-    doc.fontSize(10).fillColor('#555').text(`Date: ${new Date(date).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`);
+    doc.fontSize(10).fillColor('#555').text(`Date: ${formatCalendarDate(date, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`);
     doc.fillColor('#000');
     doc.moveDown();
 

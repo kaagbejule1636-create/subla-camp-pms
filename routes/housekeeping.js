@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
-const { drawLetterhead } = require('../services/pdf-letterhead');
+const { drawLetterhead, formatDubaiDateTime } = require('../services/pdf-letterhead');
 
 // GET /api/housekeeping/tasks — the housekeeping team's task board.
 // Optional filters: status, assigned_to, room_id
@@ -154,13 +154,13 @@ router.get('/report', async (req, res) => {
        ORDER BY CASE ht.priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, ht.created_at`
     );
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=housekeeping-report-${new Date().toISOString().slice(0, 10)}.pdf`);
     doc.pipe(res);
 
     drawLetterhead(doc, 'Housekeeping Report');
-    doc.fontSize(10).fillColor('#555').text(`Generated: ${new Date().toLocaleString()}`);
+    doc.fontSize(10).fillColor('#555').text(`Generated: ${formatDubaiDateTime(new Date())}`);
     doc.fillColor('#000');
     doc.moveDown();
 
