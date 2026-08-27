@@ -86,6 +86,7 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Print expenses list | `GET /api/expenses/print?start=&end=&category=` (supervisor+) |
 | Print cashbook | `GET /api/reports/cashbook/print?start=&end=` (manager only) |
 | Combined daily report (Occupancy + Front Office + Housekeeping) | `GET /api/reports/daily?date=` (manager only) |
+| Print night audit | `GET /api/night-audit/print?date=` |
 | Print combined daily report | `GET /api/reports/daily/print?date=` (manager only) |
 | Edit an inventory item | `PATCH /api/inventory/items/:id` (supervisor+) — not stock levels, see design note |
 | Deactivate an inventory item | `DELETE /api/inventory/items/:id` (manager only) — deactivates, doesn't hard-delete, see design note |
@@ -150,12 +151,13 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 - **Every printed document is now genuine A4**, not PDFKit's US Letter default — a real, easy-to-miss difference (Letter is about 3.5% narrower and 6% shorter than A4), fixed by explicitly setting the page size on all 8 PDF-generating routes and confirmed against the actual output dimensions, not just the code that requests them.
 - **Server-side timestamps could show the wrong time and even the wrong date — fixed.** Render can run this app's server in any region, and its system clock is very likely UTC, not UAE time — but every printed "Printed:", "Generated:", "Issued:", and "Departed:" timestamp was calling `toLocaleString()` with no timezone specified, which silently uses wherever the *server* happens to sit rather than Dubai. A second, sneakier version of the same bug affected pure calendar dates (check-in/check-out dates, date of birth, expense dates): Postgres returns these as UTC-midnight of that date, and formatting them with no timezone forced could roll them back a full day depending on the server's location — confirmed this exact failure with a real test (a stored date of August 25th displayed as August 24th under a simulated non-UAE server timezone) before fixing it. `services/pdf-letterhead.js` now exports three formatting helpers used everywhere a date appears in a printed document — `formatDubaiDateTime` for an actual moment (always shown in Dubai time, regardless of server location), `formatCalendarDate` for a pure date with no time-of-day (always reads back the exact date stored, never shifted), and `formatDubaiDate` for the date-portion of a real timestamp (like a transaction's date in the cashbook). Re-verified both the date-shift and the wrong-time-of-day bug were actually fixed, under a simulated non-UAE server timezone, not just re-reading the code and assuming it now works.
 
+- **Night Audit finally has a real screen**, not just raw API endpoints — preview the day's numbers, see who'll be marked no-show, close the day (supervisor+, matching the API's own gating), print it, and browse recent history, all in one place. The print PDF reuses the exact same summary-building function as the on-screen preview, so the two can never show different numbers for the same day. Tab visible to supervisor+ only, since that's who can actually close a day — verified this boundary with a real receptionist login, not just by reading the gating code.
+- **The housekeeping report was built weeks ago but never actually reachable** — the PDF worked if you knew the URL, but nothing in the app linked to it. There's now a small "Print Housekeeping Report" link right next to the room grid on the dashboard.
+
 ## Not yet built (next phases)
 
 - A signup/onboarding flow for the first user (currently seeded directly via `psql`, see Setup above)
-- A printable night audit report (same style as the housekeeping report) — the night audit API itself (`preview`/`close`/`history`) already exists and works
-- Back-of-house/operational inventory (cleaning supplies, F&B) — see the inventory design note above
-- The web frontend covers login, dashboard, check-in/check-out, ID capture, room housekeeping actions, printable documents, and now Inventory/Expenses/Cashbook screens with tab navigation. Still missing from the UI: the housekeeping report, occupancy/revenue reports, and night audit — all work via the API, just no button for them yet
+- The web frontend covers login, dashboard, check-in/check-out, ID capture, room housekeeping actions, printable documents (including a housekeeping-report print link right on the dashboard, and a full Night Audit screen), and Inventory/Expenses/Cashbook/Reports/Night Audit screens with tab navigation. Still missing from the UI: occupancy/revenue reports — work via the API, just no button for them yet
 
 ## Worth knowing before you scale this
 

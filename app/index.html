@@ -372,6 +372,7 @@
       <button class="tab-btn hidden" id="tab-expenses" data-view="expenses">Expenses</button>
       <button class="tab-btn hidden" id="tab-cashbook" data-view="cashbook">Cashbook</button>
       <button class="tab-btn hidden" id="tab-reports" data-view="reports">Reports</button>
+      <button class="tab-btn hidden" id="tab-night-audit" data-view="night-audit">Night Audit</button>
     </div>
 
     <div id="view-dashboard">
@@ -415,7 +416,10 @@
           Some guests are past their checkout date and haven't been checked out yet — find them via their room's checkout screen.
         </div>
 
-        <p class="section-title">Room status</p>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <p class="section-title" style="margin-bottom:0;">Room status</p>
+          <a class="btn btn-ghost" id="hk-print-link" href="#" target="_blank" rel="noopener" style="font-size:12.5px; padding:6px 12px;">Print Housekeeping Report</a>
+        </div>
         <div class="room-tags" id="room-grid"></div>
       </div>
     </div>
@@ -425,6 +429,7 @@
     <div id="view-expenses" class="wrap hidden"></div>
     <div id="view-cashbook" class="wrap hidden"></div>
     <div id="view-reports" class="wrap hidden"></div>
+    <div id="view-night-audit" class="wrap hidden"></div>
   </div>
 
   <!-- ============ MODAL (check-in / check-out) ============ -->
@@ -488,13 +493,14 @@
     document.getElementById('tab-expenses').classList.toggle('hidden', !(role === 'manager' || role === 'supervisor'));
     document.getElementById('tab-cashbook').classList.toggle('hidden', role !== 'manager');
     document.getElementById('tab-reports').classList.toggle('hidden', role !== 'manager');
+    document.getElementById('tab-night-audit').classList.toggle('hidden', !(role === 'manager' || role === 'supervisor'));
     updateTodayDate();
     startTodayDateAutoRefresh();
     switchView('dashboard');
   }
 
   // -------- Tab navigation --------
-  const VIEWS = ['dashboard', 'inventory', 'expenses', 'cashbook', 'reports'];
+  const VIEWS = ['dashboard', 'inventory', 'expenses', 'cashbook', 'reports', 'night-audit'];
   function switchView(name) {
     VIEWS.forEach((v) => {
       document.getElementById(`view-${v}`).classList.toggle('hidden', v !== name);
@@ -507,6 +513,7 @@
     else if (name === 'expenses') loadExpensesView();
     else if (name === 'cashbook') loadCashbookView();
     else if (name === 'reports') loadReportsView();
+    else if (name === 'night-audit') loadNightAuditView();
   }
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
@@ -602,6 +609,7 @@
       overdueCard.style.borderColor = hasOverdue ? 'var(--red)' : '';
       document.getElementById('stat-overdue').style.color = hasOverdue ? 'var(--red)' : '';
       overdueBanner.classList.toggle('hidden', !hasOverdue);
+      document.getElementById('hk-print-link').href = `${API_BASE}/api/housekeeping/report?token=${encodeURIComponent(getToken())}`;
 
       const grid = document.getElementById('room-grid');
       grid.innerHTML = '';
@@ -1666,6 +1674,108 @@
       });
     } catch (err) {
       container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load report.')}</div>`;
+    }
+  }
+
+  // -------- Night Audit view (supervisor+ view, closing needs supervisor+ too — matches backend) --------
+  async function loadNightAuditView(customDate) {
+    const container = document.getElementById('view-night-audit');
+    const date = customDate || todayISO();
+    container.innerHTML = `<div class="loading">Loading night audit…</div>`;
+    const user = getUser();
+    const canClose = user?.role === 'manager' || user?.role === 'supervisor';
+
+    try {
+      const [preview, history] = await Promise.all([
+        apiFetch(`/api/night-audit/preview?date=${date}`),
+        apiFetch('/api/night-audit/history?limit=10'),
+      ]);
+
+      container.innerHTML = `
+        <div class="page-head"><h1>Night Audit</h1><p>Review and close the business day.</p></div>
+        <div class="toolbar">
+          <div class="toolbar-filters">
+            <div class="field"><label>Business date</label><input type="date" id="na-date" value="${date}"></div>
+            <button class="btn btn-ghost" id="na-filter-btn" style="height:38px;">Apply</button>
+          </div>
+          <a class="btn btn-ghost" href="${API_BASE}/api/night-audit/print?date=${date}&token=${encodeURIComponent(getToken())}" target="_blank" rel="noopener">Print</a>
+        </div>
+
+        ${preview.already_closed ? `
+          <div class="folio-line total balance-zero" style="margin-bottom:16px; border:1px solid var(--line); border-radius:8px; padding:10px 14px;">
+            <span>This business day is already closed.</span><span></span>
+          </div>
+        ` : ''}
+
+        <div class="summary-row">
+          <div class="summary-pill"><div class="label">Arrivals</div><div class="value">${preview.arrivals}</div></div>
+          <div class="summary-pill"><div class="label">Confirmed, Not Arrived</div><div class="value">${preview.expected_but_not_arrived}</div></div>
+          <div class="summary-pill"><div class="label">Departures</div><div class="value">${preview.departures}</div></div>
+          <div class="summary-pill"><div class="label">Occupancy</div><div class="value">${preview.occupancy_pct}%</div></div>
+        </div>
+        <div class="summary-row">
+          <div class="summary-pill"><div class="label">Room Revenue</div><div class="value">AED ${preview.room_revenue.toFixed(2)}</div></div>
+          <div class="summary-pill"><div class="label">Extra Charges</div><div class="value">AED ${preview.extra_revenue.toFixed(2)}</div></div>
+          <div class="summary-pill"><div class="label">Payments</div><div class="value">AED ${preview.payments_total.toFixed(2)}</div></div>
+        </div>
+
+        ${preview.pending_no_shows.length ? `
+          <div class="modal-error" style="margin-bottom:16px;">
+            ${preview.pending_no_shows.length} reservation${preview.pending_no_shows.length === 1 ? '' : 's'} will be marked No-Show if this day is closed now:
+            ${preview.pending_no_shows.map((r) => escapeHtml(`${r.reservation_code} — ${r.full_name}`)).join(', ')}
+          </div>
+        ` : ''}
+
+        ${canClose && !preview.already_closed ? `
+          <div id="na-error" class="modal-error hidden"></div>
+          <button class="btn btn-primary" id="na-close-btn">Close Business Day</button>
+        ` : ''}
+
+        <p class="section-title" style="margin-top:28px;">Recent History</p>
+        <table class="data-table">
+          <thead><tr><th>Date</th><th>Arrivals</th><th>Departures</th><th>No-Shows</th><th>Occupancy</th><th>Room Rev.</th><th>Closed By</th></tr></thead>
+          <tbody>
+            ${history.map((h) => `
+              <tr>
+                <td>${new Date(h.business_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</td>
+                <td>${h.arrivals}</td>
+                <td>${h.departures}</td>
+                <td>${h.no_shows}</td>
+                <td>${h.total_rooms > 0 ? Math.round((h.occupied_rooms / h.total_rooms) * 1000) / 10 : 0}%</td>
+                <td class="num">AED ${Number(h.room_revenue).toFixed(2)}</td>
+                <td>${escapeHtml(h.closed_by || '—')}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="7" style="text-align:center; color:var(--ink-soft);">No closed business days yet.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+
+      document.getElementById('na-filter-btn').addEventListener('click', () => {
+        loadNightAuditView(document.getElementById('na-date').value);
+      });
+
+      const closeBtn = document.getElementById('na-close-btn');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', async () => {
+          const msg = preview.pending_no_shows.length
+            ? `Close ${date}? ${preview.pending_no_shows.length} reservation(s) will be marked No-Show. This can't be undone.`
+            : `Close ${date}? This can't be undone.`;
+          if (!confirm(msg)) return;
+          const errorBox = document.getElementById('na-error');
+          errorBox.classList.add('hidden');
+          closeBtn.disabled = true;
+          try {
+            await apiFetch('/api/night-audit/close', { method: 'POST', body: JSON.stringify({ date }) });
+            loadNightAuditView(date);
+          } catch (err) {
+            closeBtn.disabled = false;
+            errorBox.textContent = err.message || 'Failed to close business day.';
+            errorBox.classList.remove('hidden');
+          }
+        });
+      }
+    } catch (err) {
+      container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load night audit.')}</div>`;
     }
   }
 

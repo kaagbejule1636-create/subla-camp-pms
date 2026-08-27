@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const PDFDocument = require('pdfkit');
 const { requireRole } = require('../middleware/auth');
+const { drawLetterhead, formatCalendarDate, formatDubaiDateTime } = require('../services/pdf-letterhead');
 
 // Builds today's summary numbers. Shared by preview and close so what you review
 // is exactly what gets stored.
@@ -90,6 +92,84 @@ router.get('/preview', async (req, res) => {
 
 // POST /api/night-audit/close — marks unarrived confirmed reservations as no-show,
 // snapshots the day's summary, and closes the business day so it can't be re-run.
+// GET /api/night-audit/print?date= — printable PDF version of the preview/summary.
+// Reuses buildSummary so the printed numbers can never drift from what /preview shows.
+router.get('/print', async (req, res) => {
+  const businessDate = req.query.date || new Date().toISOString().slice(0, 10);
+  const client = await pool.connect();
+  try {
+    const summary = await buildSummary(client, businessDate);
+    const { rows: pendingNoShows } = await client.query(
+      `SELECT res.reservation_code, g.full_name
+       FROM reservations res JOIN guests g ON g.id = res.guest_id
+       WHERE res.check_in_date = $1 AND res.status = 'confirmed'`,
+      [businessDate]
+    );
+    const { rows: existing } = await client.query(
+      `SELECT * FROM business_days WHERE business_date = $1`,
+      [businessDate]
+    );
+    const isClosed = existing.length > 0 && existing[0].status === 'closed';
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Disposition', `inline; filename=night-audit-${businessDate}.pdf`);
+    doc.pipe(res);
+
+    drawLetterhead(doc, 'Night Audit');
+    doc.fontSize(10).fillColor('#555');
+    doc.text(`Business date: ${formatCalendarDate(businessDate, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`);
+    doc.text(`Status: ${isClosed ? `Closed${existing[0].closed_by ? ` by ${existing[0].closed_by}` : ''}${existing[0].closed_at ? ` at ${formatDubaiDateTime(existing[0].closed_at)}` : ''}` : 'Not yet closed'}`);
+    doc.fillColor('#000');
+    doc.moveDown();
+
+    const statRow = (label, value) => {
+      doc.fontSize(10).fillColor('#555').text(label, 50, doc.y, { width: 260 });
+      doc.fillColor('#000').text(String(value), 320, doc.y - doc.currentLineHeight());
+      doc.x = 50;
+      doc.moveDown(0.35);
+    };
+
+    doc.fontSize(13).fillColor('#000').text('Summary', { underline: true });
+    doc.moveDown(0.3);
+    statRow('Arrivals', summary.arrivals);
+    statRow('Confirmed but not arrived', summary.expected_but_not_arrived);
+    statRow('Departures', summary.departures);
+    statRow('Occupied rooms', `${summary.occupied_rooms} / ${summary.total_rooms}`);
+    statRow('Occupancy', `${summary.occupancy_pct}%`);
+    doc.moveDown(0.5);
+
+    doc.fontSize(13).fillColor('#000').text('Revenue', { underline: true });
+    doc.moveDown(0.3);
+    statRow('Room revenue', `AED ${summary.room_revenue.toFixed(2)}`);
+    statRow('Extra charges', `AED ${summary.extra_revenue.toFixed(2)}`);
+    statRow('Payments received', `AED ${summary.payments_total.toFixed(2)}`);
+    doc.moveDown(0.5);
+
+    if (pendingNoShows.length) {
+      doc.fontSize(13).fillColor('#000').text(
+        isClosed ? 'Marked as No-Show' : 'Will Be Marked No-Show if Closed Now',
+        { underline: true }
+      );
+      doc.moveDown(0.3);
+      doc.fontSize(10).fillColor('#000');
+      pendingNoShows.forEach((r) => {
+        doc.text(`${r.reservation_code} — ${r.full_name}`, 50, doc.y);
+        doc.moveDown(0.3);
+      });
+      doc.x = 50;
+    }
+
+    doc.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate night audit PDF' });
+  } finally {
+    client.release();
+  }
+});
+
 router.post('/close', requireRole('supervisor'), async (req, res) => {
   const { date } = req.body;
   const businessDate = date || new Date().toISOString().slice(0, 10);
