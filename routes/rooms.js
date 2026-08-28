@@ -1,14 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const { requireRole } = require('../middleware/auth');
 
 // GET /api/rooms — full room grid (used by the dashboard and room-assignment tile view)
 // Optional query params: room_type_id, occupancy_status, housekeeping_status
+// Only active rooms by default — pass include_inactive=true to see everything, used by the
+// room-management screen where a deactivated room still needs to be visible to reactivate.
 router.get('/', async (req, res) => {
-  const { room_type_id, occupancy_status, housekeeping_status } = req.query;
+  const { room_type_id, occupancy_status, housekeeping_status, include_inactive } = req.query;
   const conditions = [];
   const values = [];
 
+  if (!include_inactive) {
+    conditions.push('r.active = TRUE');
+  }
   if (room_type_id) {
     values.push(room_type_id);
     conditions.push(`r.room_type_id = $${values.length}`);
@@ -26,7 +32,7 @@ router.get('/', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT r.id, r.room_number, r.housekeeping_status, r.occupancy_status, r.notes,
+      `SELECT r.id, r.room_number, r.housekeeping_status, r.occupancy_status, r.notes, r.active,
               rt.id AS room_type_id, rt.name AS room_type, rt.base_rate,
               g.full_name AS guest_name, res.id AS reservation_id
        FROM rooms r
@@ -41,6 +47,59 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to load rooms' });
+  }
+});
+
+// POST /api/rooms — add a new room to an existing category (manager only — property
+// configuration, not day-to-day front-desk work).
+router.post('/', requireRole('manager'), async (req, res) => {
+  const { room_number, room_type_id } = req.body;
+  if (!room_number || !room_type_id) {
+    return res.status(400).json({ error: 'room_number and room_type_id are required' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO rooms (room_number, room_type_id) VALUES ($1, $2) RETURNING *`,
+      [room_number, room_type_id]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: `Room "${room_number}" already exists` });
+    console.error(err);
+    res.status(500).json({ error: 'Failed to add room' });
+  }
+});
+
+// PATCH /api/rooms/:id/active — show/hide a room from the live dashboard without ever
+// deleting it, since reservations, folio transactions, and other history may reference it.
+router.patch('/:id/active', requireRole('manager'), async (req, res) => {
+  const { active } = req.body;
+  if (typeof active !== 'boolean') return res.status(400).json({ error: 'active must be true or false' });
+  const { rows } = await pool.query('UPDATE rooms SET active = $1 WHERE id = $2 RETURNING *', [active, req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Room not found' });
+  res.json(rows[0]);
+});
+
+// GET /api/rooms/room-types — every category (Deluxe Rooms, Camping Tents, etc.), for the
+// room-management screen and the "New Reservation" room-type picker.
+router.get('/room-types', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM room_types ORDER BY name');
+  res.json(rows);
+});
+
+// POST /api/rooms/room-types — add a brand-new category (manager only).
+router.post('/room-types', requireRole('manager'), async (req, res) => {
+  const { name, base_rate } = req.body;
+  if (!name || base_rate === undefined) return res.status(400).json({ error: 'name and base_rate are required' });
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO room_types (name, base_rate) VALUES ($1, $2) RETURNING *',
+      [name, base_rate]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to add category' });
   }
 });
 

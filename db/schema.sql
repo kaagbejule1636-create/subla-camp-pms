@@ -18,6 +18,9 @@ CREATE TABLE rooms (
                 CHECK (housekeeping_status IN ('clean', 'dirty', 'out_of_order')),
   occupancy_status TEXT NOT NULL DEFAULT 'vacant'
                 CHECK (occupancy_status IN ('vacant', 'occupied')),
+  active        BOOLEAN NOT NULL DEFAULT TRUE, -- hidden from the live dashboard grid when false;
+                                                 -- never deleted, since reservations/folio history
+                                                 -- may still reference it
   notes         TEXT
 );
 
