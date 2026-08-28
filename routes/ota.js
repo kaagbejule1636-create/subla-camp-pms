@@ -151,7 +151,12 @@ router.post('/bookings', requireWebhookSecret, async (req, res) => {
 // listings in sync and avoid overbooking. Read-only; not logged per-poll (that would
 // bloat ota_sync_log fast) — only actual inventory pushes should be logged via
 // POST /api/ota/sync-log below.
-router.get('/availability', requireAuth, async (req, res) => {
+//
+// Uses the same webhook secret as /bookings, not staff login — Channex (or any channel
+// manager) has no staff account to authenticate as, so this can't require the normal
+// JWT auth the rest of the app uses. Both endpoints are protected the same way for
+// exactly this reason.
+router.get('/availability', requireWebhookSecret, async (req, res) => {
   const { room_type_id, start, end } = req.query;
   if (!room_type_id || !start || !end) {
     return res.status(400).json({ error: 'room_type_id, start, and end are required' });
@@ -159,7 +164,7 @@ router.get('/availability', requireAuth, async (req, res) => {
 
   try {
     const { rows: totalRooms } = await pool.query(
-      `SELECT COUNT(*) FROM rooms WHERE room_type_id = $1 AND housekeeping_status != 'out_of_order'`,
+      `SELECT COUNT(*) FROM rooms WHERE room_type_id = $1 AND housekeeping_status != 'out_of_order' AND active = TRUE`,
       [room_type_id]
     );
     const total = Number(totalRooms[0].count);
