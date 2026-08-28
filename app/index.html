@@ -1219,11 +1219,28 @@
   function renderCheckoutBody(reservation, folio) {
     const balanceDue = Number(folio.balance_due);
     const isSettled = balanceDue <= 0;
+    const fmtDate = (d) => d ? new Date(d).toLocaleDateString(undefined, { timeZone: 'UTC' }) : '—';
+    const detailRow = (labelL, valL, labelR, valR) => `
+      <div style="display:flex; gap:24px; margin-bottom:8px;">
+        <div style="flex:1;"><div style="font-size:11px; color:var(--ink-soft);">${labelL}</div><div style="font-size:13.5px;">${valL}</div></div>
+        <div style="flex:1;"><div style="font-size:11px; color:var(--ink-soft);">${labelR}</div><div style="font-size:13.5px;">${valR}</div></div>
+      </div>`;
 
     document.getElementById('co-body').innerHTML = `
       <p style="margin:0 0 4px;"><b>${escapeHtml(reservation.full_name)}</b></p>
-      <p style="margin:0 0 16px; color:var(--ink-soft); font-size:13px;">Reservation ${escapeHtml(reservation.reservation_code)}</p>
+      <p style="margin:0 0 16px; color:var(--ink-soft); font-size:13px;">Reservation ${escapeHtml(reservation.reservation_code)} · ${escapeHtml(reservation.status.replace('_', ' '))}</p>
 
+      <p class="section-title" style="margin:0 0 8px;">Guest Details</p>
+      ${detailRow('Phone', escapeHtml(reservation.phone || '—'), 'Email', escapeHtml(reservation.email || '—'))}
+      ${detailRow('Nationality', escapeHtml(reservation.nationality || '—'), 'Date of Birth', fmtDate(reservation.date_of_birth))}
+      ${detailRow('Place of Birth', escapeHtml(reservation.place_of_birth || '—'), 'ID', reservation.id_type || reservation.id_number ? escapeHtml(`${reservation.id_type || ''} ${reservation.id_number || ''}`.trim()) : '—')}
+
+      <p class="section-title" style="margin:14px 0 8px;">Stay Details</p>
+      ${detailRow('Room Type', escapeHtml(reservation.room_type || '—'), 'Rate', `AED ${Number(reservation.rate_per_night).toFixed(2)}/night`)}
+      ${detailRow('Check-in', fmtDate(reservation.check_in_date), 'Check-out', fmtDate(reservation.check_out_date))}
+      ${detailRow('Adults', String(reservation.adults), 'Children', String(reservation.children))}
+
+      <p class="section-title" style="margin:14px 0 8px;">Folio</p>
       <div class="folio-line"><span>Total charges</span><span>AED ${Number(folio.total_charges).toFixed(2)}</span></div>
       <div class="folio-line"><span>Total paid</span><span>AED ${Number(folio.total_credits).toFixed(2)}</span></div>
       <div class="folio-line total ${isSettled ? 'balance-zero' : 'balance-due'}">

@@ -281,8 +281,11 @@ router.get('/by-room/:roomId', async (req, res) => {
   const { roomId } = req.params;
   try {
     const { rows } = await pool.query(
-      `SELECT res.*, g.full_name, g.phone
-       FROM reservations res JOIN guests g ON g.id = res.guest_id
+      `SELECT res.*, g.full_name, g.phone, g.email, g.nationality, g.date_of_birth,
+              g.place_of_birth, g.id_type, g.id_number, rt.name AS room_type
+       FROM reservations res
+       JOIN guests g ON g.id = res.guest_id
+       JOIN room_types rt ON rt.id = res.room_type_id
        WHERE res.room_id = $1 AND res.status = 'checked_in'
        ORDER BY res.checked_in_at DESC LIMIT 1`,
       [roomId]
