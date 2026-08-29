@@ -384,7 +384,10 @@
           <h1>Dashboard</h1>
           <p id="today-date">—</p>
         </div>
-        <button class="btn btn-primary" id="new-reservation-btn">+ New Reservation</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-ghost" id="dashboard-refresh-btn" title="Refresh">↻ Refresh</button>
+          <button class="btn btn-primary" id="new-reservation-btn">+ New Reservation</button>
+        </div>
       </div>
 
       <div id="dashboard-loading" class="loading">Loading today's overview…</div>
@@ -1195,6 +1198,16 @@
     }
   }
   document.getElementById('new-reservation-btn').addEventListener('click', openNewReservationModal);
+
+  document.getElementById('dashboard-refresh-btn').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Refreshing…';
+    await loadDashboard();
+    btn.textContent = originalText;
+    btn.disabled = false;
+  });
 
   // -------- Check-out flow: look up the active reservation, show the folio, settle + confirm --------
   async function openCheckoutModal(room) {
