@@ -203,17 +203,25 @@ router.get('/dashboard', async (req, res) => {
     const { rows: arrivals } = await pool.query(
       `SELECT COUNT(*) FROM reservations WHERE check_in_date = CURRENT_DATE AND status = 'confirmed'`
     );
+    // Departures, in-house, and overdue all imply a room is actually assigned and checked
+    // into — joined against rooms and scoped to active=TRUE so a leftover checked-in
+    // reservation on a room that's since been hidden from the dashboard doesn't silently
+    // inflate a count that staff can't see or act on from the grid. Expected arrivals is
+    // deliberately left alone above: an advance booking may not have a room assigned yet
+    // at all, so it shouldn't be excluded just because it has no room_id to check.
     const { rows: departures } = await pool.query(
-      `SELECT COUNT(*) FROM reservations WHERE check_out_date = CURRENT_DATE AND status = 'checked_in'`
+      `SELECT COUNT(*) FROM reservations res JOIN rooms r ON r.id = res.room_id
+       WHERE res.check_out_date = CURRENT_DATE AND res.status = 'checked_in' AND r.active = TRUE`
     );
     const { rows: inHouse } = await pool.query(
-      `SELECT COUNT(*) FROM reservations WHERE status = 'checked_in'`
+      `SELECT COUNT(*) FROM reservations res JOIN rooms r ON r.id = res.room_id
+       WHERE res.status = 'checked_in' AND r.active = TRUE`
     );
     const { rows: dirty } = await pool.query(
-      `SELECT COUNT(*) FROM rooms WHERE housekeeping_status = 'dirty'`
+      `SELECT COUNT(*) FROM rooms WHERE housekeeping_status = 'dirty' AND active = TRUE`
     );
     const { rows: outOfOrder } = await pool.query(
-      `SELECT COUNT(*) FROM rooms WHERE housekeeping_status = 'out_of_order'`
+      `SELECT COUNT(*) FROM rooms WHERE housekeeping_status = 'out_of_order' AND active = TRUE`
     );
     // Guests whose checkout date has already passed but were never actually checked out.
     // This is deliberately separate from "expected departures" (which is today's checkouts,
@@ -223,7 +231,8 @@ router.get('/dashboard', async (req, res) => {
     // balance settlement and could quietly lose track of money still owed, so this stays a
     // visible prompt rather than an automatic action.
     const { rows: overdue } = await pool.query(
-      `SELECT COUNT(*) FROM reservations WHERE status = 'checked_in' AND check_out_date < CURRENT_DATE`
+      `SELECT COUNT(*) FROM reservations res JOIN rooms r ON r.id = res.room_id
+       WHERE res.status = 'checked_in' AND res.check_out_date < CURRENT_DATE AND r.active = TRUE`
     );
     res.json({
       expected_arrivals: Number(arrivals[0].count),
