@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { requireRole } = require('../middleware/auth');
+const { syncRoomTypeAvailability } = require('../services/channex-sync');
 
 // GET /api/rooms — full room grid (used by the dashboard and room-assignment tile view)
 // Optional query params: room_type_id, occupancy_status, housekeeping_status
@@ -78,6 +79,13 @@ router.patch('/:id/active', requireRole('manager'), async (req, res) => {
   const { rows } = await pool.query('UPDATE rooms SET active = $1 WHERE id = $2 RETURNING *', [active, req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Room not found' });
   res.json(rows[0]);
+
+  // Hiding or showing a room changes the total sellable count for its whole room type —
+  // best-effort, same treatment as every other Channex sync trigger.
+  const syncFrom = new Date().toISOString().slice(0, 10);
+  const syncTo = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+  syncRoomTypeAvailability(rows[0].room_type_id, syncFrom, syncTo)
+    .catch((err) => console.error('Channex availability sync after room active/hide toggle failed:', err));
 });
 
 // GET /api/rooms/room-types — every category (Deluxe Rooms, Camping Tents, etc.), for the
@@ -101,6 +109,22 @@ router.post('/room-types', requireRole('manager'), async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'Failed to add category' });
   }
+});
+
+// PATCH /api/rooms/room-types/:id/channex-mapping — links a room type to its equivalent
+// Channex room type and rate plan, found in the Channex dashboard after mapping this
+// property's rooms there. Until this is set, the room type is simply invisible to the
+// Channex sync — no bookings come in for it, no availability gets pushed out, and nothing
+// errors; it's just not connected yet. Both fields accept an empty string to clear a
+// mapping (e.g. if you need to remap it to a different Channex object).
+router.patch('/room-types/:id/channex-mapping', requireRole('manager'), async (req, res) => {
+  const { channex_room_type_id, channex_rate_plan_id } = req.body;
+  const { rows } = await pool.query(
+    `UPDATE room_types SET channex_room_type_id = $1, channex_rate_plan_id = $2 WHERE id = $3 RETURNING *`,
+    [channex_room_type_id || null, channex_rate_plan_id || null, req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Room type not found' });
+  res.json(rows[0]);
 });
 
 // GET /api/rooms/available?room_type_id=1&check_in=2026-08-17&check_out=2026-08-19

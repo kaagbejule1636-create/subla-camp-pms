@@ -4,6 +4,7 @@ const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { resolvePaymentAmount } = require('../services/currency');
 const { drawLetterhead, drawTermsAndConditions, formatDubaiDateTime, formatCalendarDate } = require('../services/pdf-letterhead');
+const { syncRoomTypeAvailability } = require('../services/channex-sync');
 
 // GET /api/checkin/:reservationId/folio — charge summary shown on the Deposit/Payment and Confirm steps
 router.get('/:reservationId/folio', async (req, res) => {
@@ -155,6 +156,12 @@ router.post('/:reservationId/confirm', async (req, res) => {
 
     await client.query('COMMIT');
     res.json({ reservation_id: Number(reservationId), room_id: reservation.room_id, status: 'checked_in' });
+
+    // Best-effort — a Channex hiccup here should never block or fail a check-in that's
+    // already succeeded. Fire-and-forget, same treatment as the WhatsApp notifications
+    // elsewhere: errors are logged, never surfaced to the person checking a guest in.
+    syncRoomTypeAvailability(reservation.room_type_id, reservation.check_in_date, reservation.check_out_date)
+      .catch((err) => console.error('Channex availability sync after check-in failed:', err));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);

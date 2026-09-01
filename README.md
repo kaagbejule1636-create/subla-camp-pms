@@ -89,6 +89,11 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Print night audit | `GET /api/night-audit/print?date=` |
 | Change stay dates in place | `PATCH /api/reservations/:id/stay` — `{check_out_date}`; extends or shortens without a checkout/new-checkin cycle |
 | List reservations | `GET /api/reservations?start=&end=&status=` — every booking with its room and dates; defaults to a 60-day window (30 back, 30 ahead) if no dates given |
+| Channex webhook (bookings arriving) | `POST /api/channex/webhook` — protected by `CHANNEX_WEBHOOK_SECRET`, not staff login |
+| Manually trigger a Channex feed check | `POST /api/channex/sync-now` (manager only) — mainly for testing the connection |
+| Manually push availability/rates to Channex | `POST /api/channex/push-availability` — `{start, end}` (manager only) |
+| View/set the Channex property ID | `GET/PUT /api/settings/channex-property-id` (view: any logged-in user, set: manager only) |
+| Map a room type to Channex | `PATCH /api/rooms/room-types/:id/channex-mapping` — `{channex_room_type_id, channex_rate_plan_id}` (manager only) |
 | List rooms | `GET /api/rooms?include_inactive=true` — active-only by default; pass `include_inactive` to also see hidden rooms |
 | Add a room | `POST /api/rooms` — `{room_number, room_type_id}` (manager only) |
 | Show/hide a room | `PATCH /api/rooms/:id/active` — `{active: true\|false}` (manager only) — hides from the dashboard without deleting, so history stays intact |
@@ -172,6 +177,36 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 - **The Reservations list now sorts unassigned advance bookings to the very top**, ahead of everything else regardless of how far out their arrival date is — an unassigned booking six months out still needs attention sooner than an assigned one arriving next week. Unassigned rows get a stronger highlight (red-tinted) than assigned advance bookings (green-tinted), and settled reservations (checked-in, checked-out, cancelled) get no highlight at all. Verified this with a booking dated months later than another that still correctly sorted first because it was unassigned, not just checked that the code looked right.
 
 - **Clicking an occupied room now shows the full guest picture, not just the bill.** The checkout screen used to only show the folio (charges, payments, balance) — clicking through to actually see who the guest was, their contact details, or their stay dates meant going somewhere else. It now shows Guest Details (phone, email, nationality, date of birth, place of birth, ID) and Stay Details (room type, rate, check-in/out dates, adults/children) above the folio, all in the same tabulated style used on the printed registration card. This needed a backend change too — `GET /api/reservations/by-room/:roomId` was only returning the guest's name and phone; it now returns everything the registration card already shows. Verified every field renders correctly, including the case where optional fields (email, nationality, ID) are blank — each one falls back to a plain dash rather than showing "undefined" or breaking the layout.
+
+## Channex integration (Booking.com and Airbnb via a real channel manager)
+
+Built against Channex's actual documented API (docs.channex.io), not guessed — every request and response shape here matches their real examples, and the whole thing was tested end-to-end against a mock server replicating those exact shapes plus a real Postgres database, not just read through and assumed correct.
+
+### Setup, in order
+
+1. Sign up at staging.channex.io (free) and generate an API key (Organisation page → API Keys)
+2. Set two environment variables on Render: `CHANNEX_API_KEY` (the key from step 1) and `CHANNEX_BASE_URL` (`https://staging.channex.io` while testing, `https://channex.io` once live)
+3. Set `CHANNEX_WEBHOOK_SECRET` too — any long random string, shared with Channex when you configure the webhook in their dashboard
+4. Run the migration below to add the mapping columns
+5. In Subla Camp PMS, open **Manage Rooms** (🏠 icon) → **Channex Integration** section: enter your Channex Property ID, and for each room type, its matching Channex Room Type ID and Rate Plan ID (found in the Channex dashboard once you've mapped this property's rooms there)
+6. In Channex, point the booking webhook at `https://subla-camp-pms.onrender.com/api/channex/webhook`, with the same secret as step 3
+
+### How it actually works
+
+- **Bookings arriving** (Booking.com/Airbnb → Subla Camp PMS): Channex's webhook is just a trigger — it doesn't carry the booking itself, so on receipt the server immediately pulls the real booking data from Channex's Booking Revisions Feed, and a **backup poll runs every 15 minutes regardless**, per Channex's own recommendation, so a missed webhook never loses a booking. Every processed revision is acknowledged with Channex afterward — mandatory, or Channex keeps re-sending the same one.
+- **New bookings land unassigned, on purpose** — exactly like a manually created advance booking, showing up highlighted in the Reservations tab, ready to have a room assigned before arrival and checked in through "Existing Reservation" when the guest shows up. Nothing here forces a room to be picked automatically.
+- **A real safety check**: if Channex reports a booking as cancelled but the guest is already checked in, it is **not** silently cancelled — that's flagged for a human decision instead, with a WhatsApp alert. Auto-cancelling a guest who's already in the room would be a serious bug, not a convenience.
+- **An unmapped room type doesn't error or lose the booking** — it's logged clearly (Sync Log) and staff are alerted, since the fix is mapping the room type, not retrying the same message.
+- **Availability and rates going out** (Subla Camp PMS → Channex, so it doesn't oversell you): pushed automatically after check-in, check-out, cancellation, a stay-date change, or a room being hidden/shown — recalculated fresh from actual room/reservation state each time, not tracked as a running delta that could drift out of sync.
+- **Rates use the room type's flat base rate** — a genuine simplification. Subla Camp PMS also has seasonal rate plans; a fuller integration would push those per-date instead of one flat number. Worth knowing if rates ever need to vary by season on the OTA side.
+
+### What's tested, and what isn't
+
+Tested directly, with real assertions, not just "it didn't crash": a new Booking.com booking and a new Airbnb booking both correctly create reservations with the right guest details, dates, and a rate correctly back-calculated from the total (verified exact numbers, e.g. $153 over 2 nights → $76.50/night); running the same feed twice creates no duplicates; a modification updates the existing reservation; a cancellation on a still-confirmed booking cancels it; the checked-in safety check genuinely blocks an auto-cancel; an unmapped room type is skipped without crashing and logs a clear reason; the outbound push sends the exact right numbers (confirmed availability arithmetic — 5 total rooms minus 1 overlapping booking = 4 — and confirmed the exact JSON sent to Channex matches their documented format, including the property ID, room type ID, and rate formatting).
+
+Not tested: an actual live call to Channex's real servers — this sandboxed environment can't reach `staging.channex.io` directly, so live connectivity, real webhook delivery, and Channex's own certification process are still ahead. The first genuine live test should happen carefully, watched closely, the same as any new financial integration.
+
+## Not yet built (next phases)
 
 ## Not yet built (next phases)
 

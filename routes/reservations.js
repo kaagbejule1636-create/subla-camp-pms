@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const { syncRoomTypeAvailability } = require('../services/channex-sync');
 
 function generateReservationCode() {
   // Simple readable code, e.g. SC-4821. Swap for a sequence/table if you need strict ordering.
@@ -191,6 +192,12 @@ router.patch('/:id/cancel', async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Reservation not found or already checked in' });
     res.json(rows[0]);
+
+    // Cancelling frees up the dates it was holding — worth telling Channex, best-effort.
+    const syncFrom = new Date().toISOString().slice(0, 10);
+    const syncTo = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+    syncRoomTypeAvailability(rows[0].room_type_id, syncFrom, syncTo)
+      .catch((err) => console.error('Channex availability sync after cancellation failed:', err));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to cancel reservation' });
@@ -382,6 +389,13 @@ router.patch('/:id/stay', async (req, res) => {
       id: Number(id), check_in_date: newCheckIn, check_out_date,
       nights_added: addedNights, charge_added: chargeAdded,
     });
+
+    // Extending or shortening either frees up dates or consumes more of them — push the
+    // wider of the old and new ranges so Channex sees the full affected window either way.
+    const rangeStart = [existing.check_in_date, newCheckIn].sort()[0];
+    const rangeEnd = [existing.check_out_date, check_out_date].sort().reverse()[0];
+    syncRoomTypeAvailability(existing.room_type_id, rangeStart, rangeEnd)
+      .catch((err) => console.error('Channex availability sync after stay change failed:', err));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);

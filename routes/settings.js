@@ -39,4 +39,39 @@ router.put('/terms-and-conditions', requireRole('manager'), async (req, res) => 
   }
 });
 
+// GET /api/settings/channex-property-id — the Channex UUID for this property, needed
+// before any availability/rate can be pushed to Channex. Any logged-in user can view it
+// (it's not sensitive, just an identifier), falls back to null if not set yet.
+router.get('/channex-property-id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT value, updated_at, updated_by FROM settings WHERE key = 'channex_property_id'`);
+    if (rows.length) return res.json(rows[0]);
+    res.json({ value: null, updated_at: null, updated_by: null });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to load Channex property ID' });
+  }
+});
+
+// PUT /api/settings/channex-property-id — manager-only, since a wrong value here would
+// mean availability/rates get pushed to the wrong property (or nowhere at all).
+router.put('/channex-property-id', requireRole('manager'), async (req, res) => {
+  const { value } = req.body;
+  if (!value || !value.trim()) return res.status(400).json({ error: 'value is required' });
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO settings (key, value, updated_by)
+       VALUES ('channex_property_id', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_by = $2, updated_at = now()
+       RETURNING value, updated_at, updated_by`,
+      [value.trim(), req.user.username]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to save Channex property ID' });
+  }
+});
+
 module.exports = router;

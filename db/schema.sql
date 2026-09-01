@@ -7,7 +7,9 @@ CREATE TABLE room_types (
   name          TEXT NOT NULL,              -- e.g. 'Deluxe Tent', 'Standard Room'
   base_rate     NUMERIC(10,2) NOT NULL,
   max_adults    INTEGER NOT NULL DEFAULT 2,
-  max_children  INTEGER NOT NULL DEFAULT 0
+  max_children  INTEGER NOT NULL DEFAULT 0,
+  channex_room_type_id TEXT,                -- Channex's UUID for this room type, once mapped
+  channex_rate_plan_id TEXT                 -- Channex's UUID for the rate plan tied to it
 );
 
 CREATE TABLE rooms (

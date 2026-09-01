@@ -4,6 +4,7 @@ const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { resolvePaymentAmount } = require('../services/currency');
 const { drawLetterhead, formatDubaiDateTime, formatCalendarDate } = require('../services/pdf-letterhead');
+const { syncRoomTypeAvailability } = require('../services/channex-sync');
 
 // GET /api/checkout/:reservationId/folio — full bill for review before checkout.
 // Same shape as the check-in folio endpoint (room charges + extras vs payments/deposits/discounts).
@@ -178,6 +179,15 @@ router.post('/:reservationId/confirm', async (req, res) => {
       status: 'checked_out',
       balance_due: balanceDue,
     });
+
+    // Best-effort, same reasoning as the check-in confirm route. Push from today through a
+    // 90-day horizon — not just back to the original check_out_date, since an overdue
+    // checkout (happening after that date) would otherwise create an invalid reversed
+    // range (today later than the original checkout date).
+    const syncFrom = new Date().toISOString().slice(0, 10);
+    const syncTo = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+    syncRoomTypeAvailability(reservation.room_type_id, syncFrom, syncTo)
+      .catch((err) => console.error('Channex availability sync after check-out failed:', err));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
