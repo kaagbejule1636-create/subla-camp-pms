@@ -375,6 +375,7 @@
       <button class="tab-btn hidden" id="tab-cashbook" data-view="cashbook">Cashbook</button>
       <button class="tab-btn hidden" id="tab-reports" data-view="reports">Reports</button>
       <button class="tab-btn hidden" id="tab-night-audit" data-view="night-audit">Night Audit</button>
+      <button class="tab-btn hidden" id="tab-hr" data-view="hr">HR</button>
     </div>
 
     <div id="view-dashboard">
@@ -439,6 +440,7 @@
     <div id="view-cashbook" class="wrap hidden"></div>
     <div id="view-reports" class="wrap hidden"></div>
     <div id="view-night-audit" class="wrap hidden"></div>
+    <div id="view-hr" class="wrap hidden"></div>
   </div>
 
   <!-- ============ MODAL (check-in / check-out) ============ -->
@@ -485,6 +487,29 @@
     return data;
   }
 
+  // Separate from apiFetch above — this is for endpoints that return a PDF file directly
+  // rather than JSON, used where the request needs a POST body (freeform text too long to
+  // put in a URL) instead of the simple <a href> links the other print buttons use.
+  async function apiFetchBlob(path, options = {}) {
+    const token = getToken();
+    const headers = Object.assign(
+      { 'Content-Type': 'application/json' },
+      options.headers || {},
+      token ? { Authorization: `Bearer ${token}` } : {}
+    );
+    const res = await fetch(`${API_BASE}${path}`, Object.assign({}, options, { headers }));
+    if (res.status === 401) {
+      clearSession();
+      showLogin();
+      throw new Error('Session expired. Please sign in again.');
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Request failed (${res.status})`);
+    }
+    return res.blob();
+  }
+
   // -------- Screen switching --------
   function showLogin() {
     document.getElementById('login-screen').classList.remove('hidden');
@@ -504,13 +529,14 @@
     document.getElementById('tab-cashbook').classList.toggle('hidden', role !== 'manager');
     document.getElementById('tab-reports').classList.toggle('hidden', role !== 'manager');
     document.getElementById('tab-night-audit').classList.toggle('hidden', !(role === 'manager' || role === 'supervisor'));
+    document.getElementById('tab-hr').classList.toggle('hidden', role !== 'manager');
     updateTodayDate();
     startTodayDateAutoRefresh();
     switchView('dashboard');
   }
 
   // -------- Tab navigation --------
-  const VIEWS = ['dashboard', 'reservations', 'inventory', 'expenses', 'cashbook', 'reports', 'night-audit'];
+  const VIEWS = ['dashboard', 'reservations', 'inventory', 'expenses', 'cashbook', 'reports', 'night-audit', 'hr'];
   function switchView(name) {
     VIEWS.forEach((v) => {
       document.getElementById(`view-${v}`).classList.toggle('hidden', v !== name);
@@ -525,6 +551,7 @@
     else if (name === 'cashbook') loadCashbookView();
     else if (name === 'reports') loadReportsView();
     else if (name === 'night-audit') loadNightAuditView();
+    else if (name === 'hr') loadHRView();
   }
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
@@ -2486,6 +2513,348 @@
     }
   }
   document.getElementById('manage-rooms-btn').addEventListener('click', openManageRoomsModal);
+
+  // -------- HR (manager-only): letterhead letters, employee directory, leave requests --------
+  function loadHRView() {
+    const container = document.getElementById('view-hr');
+    container.innerHTML = `
+      <div class="page-head"><h1>HR</h1><p>Letters, staff directory, and leave records.</p></div>
+      <div class="tabbar" style="padding:0; margin-bottom:20px;">
+        <button type="button" class="tab-btn active" id="hr-subtab-letters" style="padding:8px 14px;">Letters</button>
+        <button type="button" class="tab-btn" id="hr-subtab-employees" style="padding:8px 14px;">Employees</button>
+        <button type="button" class="tab-btn" id="hr-subtab-leave" style="padding:8px 14px;">Leave</button>
+      </div>
+      <div id="hr-panel-letters"></div>
+      <div id="hr-panel-employees" class="hidden"></div>
+      <div id="hr-panel-leave" class="hidden"></div>
+    `;
+
+    const subtabs = { letters: 'hr-subtab-letters', employees: 'hr-subtab-employees', leave: 'hr-subtab-leave' };
+    function switchHRSubtab(name) {
+      Object.entries(subtabs).forEach(([key, btnId]) => {
+        document.getElementById(btnId).classList.toggle('active', key === name);
+        document.getElementById(`hr-panel-${key}`).classList.toggle('hidden', key !== name);
+      });
+      if (name === 'letters') loadHRLettersPanel();
+      else if (name === 'employees') loadHREmployeesPanel();
+      else if (name === 'leave') loadHRLeavePanel();
+    }
+    document.getElementById('hr-subtab-letters').addEventListener('click', () => switchHRSubtab('letters'));
+    document.getElementById('hr-subtab-employees').addEventListener('click', () => switchHRSubtab('employees'));
+    document.getElementById('hr-subtab-leave').addEventListener('click', () => switchHRSubtab('leave'));
+
+    loadHRLettersPanel();
+  }
+
+  // ---- Letters sub-panel: the letterhead print tool, plus saved templates ----
+  async function loadHRLettersPanel() {
+    const panel = document.getElementById('hr-panel-letters');
+    panel.innerHTML = `<div class="loading">Loading templates…</div>`;
+    try {
+      const templates = await apiFetch('/api/hr/templates');
+      panel.innerHTML = `
+        <div class="field-row">
+          <div class="field" style="flex:1;">
+            <label>Load a saved template (optional)</label>
+            <select id="hr-template-select">
+              <option value="">— Start blank —</option>
+              ${templates.map((t) => `<option value="${t.id}">${escapeHtml(t.title)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field required">
+          <label>Document title</label>
+          <input type="text" id="hr-title" placeholder="e.g. Offer Letter, Warning Letter, Memo" value="Internal Memo">
+        </div>
+        <div class="field required">
+          <label>Content</label>
+          <textarea id="hr-content" rows="16" style="width:100%; font-size:14px; padding:12px; border:1px solid var(--line); border-radius:8px; resize:vertical; font-family:'Inter',sans-serif;" placeholder="Type or paste the letter here…"></textarea>
+        </div>
+        <div id="hr-error" class="modal-error hidden" style="margin-top:10px;"></div>
+        <div id="hr-status" class="modal-status hidden"></div>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="btn btn-primary" id="hr-print-btn">Print PDF</button>
+          <button class="btn btn-ghost" id="hr-save-template-btn">Save as Template</button>
+          <button class="btn btn-ghost" id="hr-delete-template-btn" style="color:var(--red); display:none;">Delete This Template</button>
+        </div>
+      `;
+
+      const templateMap = new Map(templates.map((t) => [String(t.id), t]));
+      document.getElementById('hr-template-select').addEventListener('change', (e) => {
+        const deleteBtn = document.getElementById('hr-delete-template-btn');
+        if (!e.target.value) {
+          deleteBtn.style.display = 'none';
+          return;
+        }
+        const t = templateMap.get(e.target.value);
+        document.getElementById('hr-title').value = t.title;
+        document.getElementById('hr-content').value = t.content;
+        deleteBtn.style.display = 'inline-block';
+      });
+
+      document.getElementById('hr-save-template-btn').addEventListener('click', async () => {
+        const errorBox = document.getElementById('hr-error');
+        errorBox.classList.add('hidden');
+        const title = document.getElementById('hr-title').value.trim();
+        const content = document.getElementById('hr-content').value;
+        if (!title || !content.trim()) {
+          errorBox.textContent = 'Both a title and content are needed to save a template.';
+          errorBox.classList.remove('hidden');
+          return;
+        }
+        try {
+          await apiFetch('/api/hr/templates', { method: 'POST', body: JSON.stringify({ title, content }) });
+          await loadHRLettersPanel();
+        } catch (err) {
+          errorBox.textContent = err.message || 'Failed to save template.';
+          errorBox.classList.remove('hidden');
+        }
+      });
+
+      document.getElementById('hr-delete-template-btn').addEventListener('click', async () => {
+        const select = document.getElementById('hr-template-select');
+        if (!select.value) return;
+        if (!confirm('Delete this template? This cannot be undone.')) return;
+        try {
+          await apiFetch(`/api/hr/templates/${select.value}`, { method: 'DELETE' });
+          await loadHRLettersPanel();
+        } catch (err) {
+          document.getElementById('hr-error').textContent = err.message || 'Failed to delete template.';
+          document.getElementById('hr-error').classList.remove('hidden');
+        }
+      });
+
+      document.getElementById('hr-print-btn').addEventListener('click', async () => {
+        const errorBox = document.getElementById('hr-error');
+        const statusBox = document.getElementById('hr-status');
+        const btn = document.getElementById('hr-print-btn');
+        errorBox.classList.add('hidden');
+        const title = document.getElementById('hr-title').value.trim();
+        const content = document.getElementById('hr-content').value;
+
+        if (!content.trim()) {
+          errorBox.textContent = 'Write or paste some content before printing.';
+          errorBox.classList.remove('hidden');
+          return;
+        }
+
+        btn.disabled = true;
+        statusBox.textContent = 'Generating PDF…';
+        statusBox.classList.remove('hidden');
+        try {
+          const blob = await apiFetchBlob('/api/hr/letter/print', {
+            method: 'POST',
+            body: JSON.stringify({ title, content }),
+          });
+          const blobUrl = URL.createObjectURL(blob);
+          // A dynamically created link, clicked once the PDF is actually ready — more
+          // reliable across browsers than holding a window reference open across the wait.
+          const link = document.createElement('a');
+          link.href = blobUrl;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          statusBox.classList.add('hidden');
+        } catch (err) {
+          statusBox.classList.add('hidden');
+          errorBox.textContent = err.message || 'Failed to generate PDF.';
+          errorBox.classList.remove('hidden');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    } catch (err) {
+      panel.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load.')}</div>`;
+    }
+  }
+
+  // ---- Employees sub-panel ----
+  async function loadHREmployeesPanel() {
+    const panel = document.getElementById('hr-panel-employees');
+    panel.innerHTML = `<div class="loading">Loading employees…</div>`;
+    try {
+      const employees = await apiFetch('/api/hr/employees?include_inactive=true');
+      panel.innerHTML = `
+        <p class="section-title">Add an Employee</p>
+        <div class="field-row">
+          <div class="field required"><label>Full name</label><input type="text" id="emp-name"></div>
+          <div class="field"><label>Position</label><input type="text" id="emp-position" placeholder="e.g. Housekeeper"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Phone</label><input type="text" id="emp-phone"></div>
+          <div class="field"><label>Email</label><input type="text" id="emp-email"></div>
+        </div>
+        <div class="field"><label>Start date</label><input type="date" id="emp-start-date"></div>
+        <div id="emp-error" class="modal-error hidden"></div>
+        <button class="btn btn-primary" id="emp-add-btn">Add Employee</button>
+
+        <p class="section-title" style="margin-top:24px;">Directory</p>
+        <table class="data-table">
+          <thead><tr><th>Name</th><th>Position</th><th>Phone</th><th>Start Date</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${employees.map((e) => `
+              <tr>
+                <td>${escapeHtml(e.full_name)}</td>
+                <td>${escapeHtml(e.position || '—')}</td>
+                <td>${escapeHtml(e.phone || '—')}</td>
+                <td>${e.start_date ? new Date(e.start_date).toLocaleDateString(undefined, { timeZone: 'UTC' }) : '—'}</td>
+                <td style="color:${e.active ? 'var(--moss)' : 'var(--ink-soft)'};">${e.active ? 'Active' : 'Former'}</td>
+                <td><button type="button" class="btn btn-ghost" style="font-size:12px; padding:4px 10px;" data-toggle-employee="${e.id}" data-currently-active="${e.active}">${e.active ? 'Deactivate' : 'Reactivate'}</button></td>
+              </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center; color:var(--ink-soft);">No employees added yet.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+
+      document.getElementById('emp-add-btn').addEventListener('click', async () => {
+        const errorBox = document.getElementById('emp-error');
+        errorBox.classList.add('hidden');
+        const full_name = document.getElementById('emp-name').value.trim();
+        if (!full_name) { errorBox.textContent = 'Name is required.'; errorBox.classList.remove('hidden'); return; }
+        try {
+          await apiFetch('/api/hr/employees', {
+            method: 'POST',
+            body: JSON.stringify({
+              full_name,
+              position: document.getElementById('emp-position').value.trim() || undefined,
+              phone: document.getElementById('emp-phone').value.trim() || undefined,
+              email: document.getElementById('emp-email').value.trim() || undefined,
+              start_date: document.getElementById('emp-start-date').value || undefined,
+            }),
+          });
+          await loadHREmployeesPanel();
+        } catch (err) {
+          errorBox.textContent = err.message || 'Failed to add employee.';
+          errorBox.classList.remove('hidden');
+        }
+      });
+
+      document.querySelectorAll('[data-toggle-employee]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const currentlyActive = btn.dataset.currentlyActive === 'true';
+          try {
+            await apiFetch(`/api/hr/employees/${btn.dataset.toggleEmployee}/active`, {
+              method: 'PATCH', body: JSON.stringify({ active: !currentlyActive }),
+            });
+            await loadHREmployeesPanel();
+          } catch (err) {
+            alert(err.message || 'Failed to update employee.');
+          }
+        });
+      });
+    } catch (err) {
+      panel.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load.')}</div>`;
+    }
+  }
+
+  // ---- Leave sub-panel ----
+  async function loadHRLeavePanel() {
+    const panel = document.getElementById('hr-panel-leave');
+    panel.innerHTML = `<div class="loading">Loading leave records…</div>`;
+    try {
+      const [leaveRequests, employees] = await Promise.all([
+        apiFetch('/api/hr/leave'),
+        apiFetch('/api/hr/employees'),
+      ]);
+      const statusColor = { pending: 'var(--ink-soft)', approved: 'var(--moss)', rejected: 'var(--red)' };
+
+      panel.innerHTML = `
+        <p class="section-title">Record a Leave Request</p>
+        ${employees.length === 0 ? `<p style="font-size:13px; color:var(--ink-soft);">Add an employee first, in the Employees tab.</p>` : `
+          <div class="field-row">
+            <div class="field required"><label>Employee</label>
+              <select id="lv-employee">${employees.map((e) => `<option value="${e.id}">${escapeHtml(e.full_name)}</option>`).join('')}</select>
+            </div>
+            <div class="field required"><label>Type</label>
+              <select id="lv-type"><option value="annual">Annual</option><option value="sick">Sick</option><option value="unpaid">Unpaid</option><option value="other">Other</option></select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field required"><label>Start date</label><input type="date" id="lv-start"></div>
+            <div class="field required"><label>End date</label><input type="date" id="lv-end"></div>
+          </div>
+          <div class="field"><label>Notes</label><input type="text" id="lv-notes"></div>
+          <div id="lv-error" class="modal-error hidden"></div>
+          <button class="btn btn-primary" id="lv-add-btn">Record Leave Request</button>
+        `}
+
+        <p class="section-title" style="margin-top:24px;">All Leave Requests</p>
+        <table class="data-table">
+          <thead><tr><th>Employee</th><th>Type</th><th>Start</th><th>End</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${leaveRequests.map((lr) => `
+              <tr>
+                <td>${escapeHtml(lr.employee_name)}</td>
+                <td>${escapeHtml(lr.leave_type)}</td>
+                <td>${new Date(lr.start_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</td>
+                <td>${new Date(lr.end_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</td>
+                <td style="color:${statusColor[lr.status]};">${escapeHtml(lr.status)}</td>
+                <td>
+                  ${lr.status === 'pending' ? `
+                    <button type="button" class="btn btn-ghost" style="font-size:12px; padding:4px 10px;" data-approve-leave="${lr.id}">Approve</button>
+                    <button type="button" class="btn btn-ghost" style="font-size:12px; padding:4px 10px; color:var(--red);" data-reject-leave="${lr.id}">Reject</button>
+                  ` : ''}
+                </td>
+              </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center; color:var(--ink-soft);">No leave requests recorded yet.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+
+      const addBtn = document.getElementById('lv-add-btn');
+      if (addBtn) {
+        addBtn.addEventListener('click', async () => {
+          const errorBox = document.getElementById('lv-error');
+          errorBox.classList.add('hidden');
+          const start_date = document.getElementById('lv-start').value;
+          const end_date = document.getElementById('lv-end').value;
+          if (!start_date || !end_date) { errorBox.textContent = 'Both dates are required.'; errorBox.classList.remove('hidden'); return; }
+          if (end_date < start_date) { errorBox.textContent = 'End date must be on or after the start date.'; errorBox.classList.remove('hidden'); return; }
+          try {
+            await apiFetch('/api/hr/leave', {
+              method: 'POST',
+              body: JSON.stringify({
+                employee_id: document.getElementById('lv-employee').value,
+                leave_type: document.getElementById('lv-type').value,
+                start_date, end_date,
+                notes: document.getElementById('lv-notes').value.trim() || undefined,
+              }),
+            });
+            await loadHRLeavePanel();
+          } catch (err) {
+            errorBox.textContent = err.message || 'Failed to record leave request.';
+            errorBox.classList.remove('hidden');
+          }
+        });
+      }
+
+      document.querySelectorAll('[data-approve-leave]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            await apiFetch(`/api/hr/leave/${btn.dataset.approveLeave}/approve`, { method: 'PATCH' });
+            await loadHRLeavePanel();
+          } catch (err) {
+            alert(err.message || 'Failed to approve.');
+          }
+        });
+      });
+      document.querySelectorAll('[data-reject-leave]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Reject this leave request?')) return;
+          try {
+            await apiFetch(`/api/hr/leave/${btn.dataset.rejectLeave}/reject`, { method: 'PATCH' });
+            await loadHRLeavePanel();
+          } catch (err) {
+            alert(err.message || 'Failed to reject.');
+          }
+        });
+      });
+    } catch (err) {
+      panel.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load.')}</div>`;
+    }
+  }
 
   // -------- Settings: editable Terms & Conditions --------
   async function openSettingsModal() {

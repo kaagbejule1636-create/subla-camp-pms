@@ -94,6 +94,12 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Manually push availability/rates to Channex | `POST /api/channex/push-availability` — `{start, end}` (manager only) |
 | View/set the Channex property ID | `GET/PUT /api/settings/channex-property-id` (view: any logged-in user, set: manager only) |
 | Map a room type to Channex | `PATCH /api/rooms/room-types/:id/channex-mapping` — `{channex_room_type_id, channex_rate_plan_id}` (manager only) |
+| Print a letter on letterhead | `POST /api/hr/letter/print` — `{title, content}` (manager only) |
+| List/add/edit employees | `GET/POST /api/hr/employees`, `PATCH /api/hr/employees/:id` (manager only) |
+| Deactivate/reactivate an employee | `PATCH /api/hr/employees/:id/active` (manager only) |
+| List/record leave requests | `GET/POST /api/hr/leave` (manager only) |
+| Approve/reject a leave request | `PATCH /api/hr/leave/:id/approve`, `PATCH /api/hr/leave/:id/reject` (manager only) |
+| List/save/delete letter templates | `GET/POST /api/hr/templates`, `DELETE /api/hr/templates/:id` (manager only) |
 | List rooms | `GET /api/rooms?include_inactive=true` — active-only by default; pass `include_inactive` to also see hidden rooms |
 | Add a room | `POST /api/rooms` — `{room_number, room_type_id}` (manager only) |
 | Show/hide a room | `PATCH /api/rooms/:id/active` — `{active: true\|false}` (manager only) — hides from the dashboard without deleting, so history stays intact |
@@ -205,6 +211,18 @@ Built against Channex's actual documented API (docs.channex.io), not guessed —
 Tested directly, with real assertions, not just "it didn't crash": a new Booking.com booking and a new Airbnb booking both correctly create reservations with the right guest details, dates, and a rate correctly back-calculated from the total (verified exact numbers, e.g. $153 over 2 nights → $76.50/night); running the same feed twice creates no duplicates; a modification updates the existing reservation; a cancellation on a still-confirmed booking cancels it; the checked-in safety check genuinely blocks an auto-cancel; an unmapped room type is skipped without crashing and logs a clear reason; the outbound push sends the exact right numbers (confirmed availability arithmetic — 5 total rooms minus 1 overlapping booking = 4 — and confirmed the exact JSON sent to Channex matches their documented format, including the property ID, room type ID, and rate formatting).
 
 Not tested: an actual live call to Channex's real servers — this sandboxed environment can't reach `staging.channex.io` directly, so live connectivity, real webhook delivery, and Channex's own certification process are still ahead. The first genuine live test should happen carefully, watched closely, the same as any new financial integration.
+
+## HR — letters, employee directory, leave requests
+
+Three sub-tabs under HR, all manager-only:
+
+**Letters** — type or paste any text (an offer letter, a warning letter, a memo, a certificate) and print it on Subla Camp's actual letterhead, formatted consistently with every other printed document in the system. Can also save a letter as a reusable template, load a saved template back into the editor, or delete one. Printed letters themselves aren't saved anywhere — only templates are, since a template is meant to be reused, while an actual signed letter is a one-off document.
+
+**Employees** — a staff directory (name, position, phone, email, start date), deliberately kept separate from PMS logins (`users`), since most staff — housekeeping, kitchen, etc. — never need a system account at all. Deactivating a former employee hides them from the active list without deleting their record, so their leave history stays intact and valid, the same pattern used everywhere else in the system for rooms and inventory items.
+
+**Leave** — record a leave request against an employee (annual, sick, unpaid, or other), then approve or reject it. This models a manager logging and actioning leave on the employee's behalf, not true self-service — there's no separate staff login for most employees to submit their own. An approved or rejected request can't be actioned again (verified directly: a second approve attempt on an already-approved request affects zero rows, not a silent double-approval).
+
+All three were tested against the real, unmodified server and a real Postgres database — not a simplified mock — covering the full lifecycle: adding an employee, deactivating and reactivating them, recording a leave request, correctly rejecting an invalid date range before it reaches the server, approving a request and confirming the action buttons disappear afterward, saving a letter as a template, loading it back with the exact title and content, and deleting it. Also reconfirmed the manager-only boundary directly at the backend level (not just checking that the tab is hidden) — a supervisor or receptionist is genuinely blocked from every new endpoint here, the same as the original letter-printing route.
 
 ## Not yet built (next phases)
 
