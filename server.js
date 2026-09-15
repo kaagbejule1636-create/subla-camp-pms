@@ -35,11 +35,26 @@ app.use('/api/currencies', requireAuth, require('./routes/currencies'));
 app.use('/api/inventory', requireAuth, require('./routes/inventory'));
 app.use('/api/expenses', requireAuth, require('./routes/expenses'));
 app.use('/api/settings', requireAuth, require('./routes/settings'));
+app.use('/api/hr', requireAuth, require('./routes/hr'));
 // OTA handles its own auth per-route: /bookings uses a webhook secret (external channel
 // managers can't hold a staff JWT), while /availability and /sync-log require staff auth.
 app.use('/api/ota', require('./routes/ota'));
+// Channex handles its own auth per-route too, same reasoning: /webhook uses a shared
+// secret since Channex has no staff account, the manual trigger routes require a real
+// manager login.
+app.use('/api/channex', require('./routes/channex'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Backup poll for the Channex booking feed — runs even though the webhook exists, per
+// Channex's own guidance: a webhook can fail to deliver, and this is the safety net that
+// catches anything it missed. Every 15 minutes, sitting in the middle of their
+// recommended 15-20 minute range. Does nothing at all if CHANNEX_API_KEY isn't set, so
+// this is harmless before the integration is actually configured.
+const { processBookingFeed } = require('./services/channex-sync');
+setInterval(() => {
+  processBookingFeed().catch((err) => console.error('Scheduled Channex feed poll failed:', err));
+}, 15 * 60 * 1000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Subla Camp PMS API listening on port ${PORT}`));
