@@ -3,6 +3,24 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { requireRole } = require('../middleware/auth');
 const { resolveRange } = require('../services/rate-resolver');
+const { scheduleRoomTypeRates } = require('../services/channex-sync');
+
+// A rate plan's own dates are both-inclusive (start_date to end_date means "applies on
+// every one of those days, end_date included") — but computeDailyRates and every other
+// range function in this codebase use an exclusive end, the same convention a
+// reservation's check_out_date already follows (the night of checkout itself isn't
+// occupied). A plan spanning a single day (start_date === end_date) would otherwise
+// produce a range whose end is not actually after its start, and the per-date computation
+// would silently walk zero nights. Adding one day converts the plan's inclusive end into
+// the exclusive bound the rest of the pipeline expects.
+function syncRangeForPlan(plan) {
+  const toDateStr = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
+  const from = plan.start_date ? toDateStr(plan.start_date) : new Date().toISOString().slice(0, 10);
+  const to = plan.end_date
+    ? new Date(new Date(plan.end_date).getTime() + 86400000).toISOString().slice(0, 10)
+    : new Date(Date.now() + 500 * 86400000).toISOString().slice(0, 10);
+  return { from, to };
+}
 
 // GET /api/rate-plans?room_type_id=1 — list plans (all, or filtered to one room type)
 router.get('/', async (req, res) => {
@@ -54,6 +72,12 @@ router.post('/', requireRole('supervisor'), async (req, res) => {
       ]
     );
     res.status(201).json(rows[0]);
+
+    // Best-effort, errors handled inside the scheduler itself — a new plan changes what
+    // Channex should be showing for its date range, whether or not it happens to include a
+    // price change (a restriction-only plan still needs the OTA told about it).
+    const { from, to } = syncRangeForPlan(rows[0]);
+    scheduleRoomTypeRates(room_type_id, from, to);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to create rate plan' });
@@ -87,12 +111,25 @@ router.patch('/:id', requireRole('supervisor'), async (req, res) => {
 
   values.push(id);
   try {
+    const { rows: beforeRows } = await pool.query('SELECT * FROM rate_plans WHERE id = $1', [id]);
     const { rows } = await pool.query(
       `UPDATE rate_plans SET ${updates.join(', ')} WHERE id = $${values.length} RETURNING *`,
       values
     );
     if (!rows.length) return res.status(404).json({ error: 'Rate plan not found' });
     res.json(rows[0]);
+
+    // Best-effort, errors handled inside the scheduler itself. If the date range itself
+    // changed (not just the price or restrictions), both the plan's old coverage (which
+    // needs reverting to whatever now applies there) and its new coverage need pushing —
+    // so this syncs the wider of the two, same reasoning as a reservation's stay change.
+    if (beforeRows.length) {
+      const before = syncRangeForPlan(beforeRows[0]);
+      const after = syncRangeForPlan(rows[0]);
+      const from = before.from < after.from ? before.from : after.from;
+      const to = before.to > after.to ? before.to : after.to;
+      scheduleRoomTypeRates(rows[0].room_type_id, from, to);
+    }
   } catch (err) {
     console.error(err);
     if (err.code === '23514') return res.status(400).json({ error: 'max_stay cannot be less than min_stay' });

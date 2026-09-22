@@ -73,34 +73,46 @@ async function acknowledgeBookingRevision(revisionId) {
   await channexRequest('POST', `/booking_revisions/${revisionId}/ack`);
 }
 
-// Pushes how many rooms of a given (mapped) room type are actually free for a date or
-// date range. `availability` is a plain count — Channex expects the real number of
-// sellable rooms, not a delta.
-async function pushAvailability(propertyId, channexRoomTypeId, dateFrom, dateTo, availability) {
+// Pushes availability across one or more date segments in a single API call — batched,
+// as Channex's own guidance asks for, rather than one call per segment. Each segment is
+// { date_from, date_to, availability }.
+async function pushAvailability(propertyId, channexRoomTypeId, segments) {
+  if (!segments.length) return null;
   return channexRequest('POST', '/availability', {
-    values: [{
+    values: segments.map((s) => ({
       property_id: propertyId,
       room_type_id: channexRoomTypeId,
-      date_from: dateFrom,
-      date_to: dateTo,
-      availability,
-    }],
+      date_from: s.date_from,
+      date_to: s.date_to,
+      availability: s.availability,
+    })),
   });
 }
 
-// Pushes the nightly rate for a mapped rate plan over a date range. Channex accepts rate
-// either as a decimal string ("500.00") or an integer in the currency's minor unit
-// (50000) — this always sends the decimal-string form, which avoids any ambiguity about
-// how many decimal places a given currency uses.
-async function pushRate(propertyId, channexRatePlanId, dateFrom, dateTo, rate) {
+// Pushes rate and restrictions across one or more date segments in a single API call.
+// Each segment is { date_from, date_to, rate, min_stay, max_stay, stop_sell,
+// closed_to_arrival, closed_to_departure } — rate is optional per segment (a
+// restriction-only change doesn't need to carry a price). Rate is always sent as a
+// decimal string ("500.00"), which avoids any ambiguity about how many decimal places a
+// given currency uses.
+async function pushRate(propertyId, channexRatePlanId, segments) {
+  if (!segments.length) return null;
   return channexRequest('POST', '/restrictions', {
-    values: [{
-      property_id: propertyId,
-      rate_plan_id: channexRatePlanId,
-      date_from: dateFrom,
-      date_to: dateTo,
-      rate: Number(rate).toFixed(2),
-    }],
+    values: segments.map((s) => {
+      const value = {
+        property_id: propertyId,
+        rate_plan_id: channexRatePlanId,
+        date_from: s.date_from,
+        date_to: s.date_to,
+      };
+      if (s.rate !== undefined && s.rate !== null) value.rate = Number(s.rate).toFixed(2);
+      if (s.min_stay !== undefined && s.min_stay !== null) value.min_stay = s.min_stay;
+      if (s.max_stay !== undefined && s.max_stay !== null) value.max_stay = s.max_stay;
+      if (s.stop_sell !== undefined) value.stop_sell = s.stop_sell;
+      if (s.closed_to_arrival !== undefined) value.closed_to_arrival = s.closed_to_arrival;
+      if (s.closed_to_departure !== undefined) value.closed_to_departure = s.closed_to_departure;
+      return value;
+    }),
   });
 }
 

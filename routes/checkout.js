@@ -4,7 +4,7 @@ const pool = require('../db/pool');
 const PDFDocument = require('pdfkit');
 const { resolvePaymentAmount } = require('../services/currency');
 const { drawLetterhead, formatDubaiDateTime, formatCalendarDate } = require('../services/pdf-letterhead');
-const { syncRoomTypeAvailability } = require('../services/channex-sync');
+const { scheduleRoomTypeAvailability } = require('../services/channex-sync');
 
 // GET /api/checkout/:reservationId/folio — full bill for review before checkout.
 // Same shape as the check-in folio endpoint (room charges + extras vs payments/deposits/discounts).
@@ -186,8 +186,7 @@ router.post('/:reservationId/confirm', async (req, res) => {
     // range (today later than the original checkout date).
     const syncFrom = new Date().toISOString().slice(0, 10);
     const syncTo = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
-    syncRoomTypeAvailability(reservation.room_type_id, syncFrom, syncTo)
-      .catch((err) => console.error('Channex availability sync after check-out failed:', err));
+    scheduleRoomTypeAvailability(reservation.room_type_id, syncFrom, syncTo);
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);

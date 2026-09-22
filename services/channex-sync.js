@@ -6,6 +6,8 @@
 
 const pool = require('../db/pool');
 const channex = require('./channex');
+const channexQueue = require('./channex-queue');
+const ariCalculator = require('./ari-calculator');
 const { sendWhatsAppMessage } = require('./whatsapp');
 
 function generateReservationCode() {
@@ -223,61 +225,100 @@ async function processBookingFeed() {
   return { processed: results.length, results };
 }
 
-// Pushes current availability and rate for one (mapped) room type to Channex, for a given
-// date range. Silently does nothing if the room type isn't mapped yet, or Channex isn't
-// configured at all — this is meant to be called after routine PMS actions (a check-in, a
-// cancellation, a room being hidden), so it shouldn't ever throw and interrupt that action;
-// errors are logged, not raised, matching how the WhatsApp notifications are treated elsewhere.
-async function syncRoomTypeAvailability(roomTypeId, dateFrom, dateTo) {
-  if (!process.env.CHANNEX_API_KEY) return { skipped: true, reason: 'Channex not configured' };
-
-  try {
-    const { rows: typeRows } = await pool.query(
-      `SELECT channex_room_type_id, channex_rate_plan_id, base_rate FROM room_types WHERE id = $1`,
-      [roomTypeId]
-    );
-    if (!typeRows.length || !typeRows[0].channex_room_type_id) {
-      return { skipped: true, reason: 'Room type is not mapped to Channex' };
-    }
-    const { channex_room_type_id, channex_rate_plan_id, base_rate } = typeRows[0];
-
-    const propertyId = await getChannexPropertyId(pool);
-    if (!propertyId) return { skipped: true, reason: 'channex_property_id is not set in settings' };
-
-    // Same counting logic used everywhere else availability is calculated — active,
-    // in-service rooms of this type, minus ones already booked over the given range.
-    const { rows: totalRows } = await pool.query(
-      `SELECT COUNT(*) FROM rooms WHERE room_type_id = $1 AND housekeeping_status != 'out_of_order' AND active = TRUE`,
-      [roomTypeId]
-    );
-    const total = Number(totalRows[0].count);
-    const { rows: bookedRows } = await pool.query(
-      `SELECT COUNT(*) FROM reservations
-       WHERE room_type_id = $1 AND status IN ('confirmed', 'checked_in')
-         AND check_in_date < $3 AND check_out_date > $2`,
-      [roomTypeId, dateFrom, dateTo]
-    );
-    const available = Math.max(0, total - Number(bookedRows[0].count));
-
-    await channex.pushAvailability(propertyId, channex_room_type_id, dateFrom, dateTo, available);
-    if (channex_rate_plan_id) {
-      await channex.pushRate(propertyId, channex_rate_plan_id, dateFrom, dateTo, base_rate);
-    }
-
-    await logSync(pool, {
-      channel: 'channex', direction: 'outbound_inventory', room_type_id: roomTypeId,
-      date_range_start: dateFrom, date_range_end: dateTo,
-      payload_summary: `Pushed availability=${available}, rate=${base_rate}`, status: 'success',
-    });
-    return { pushed: true, available };
-  } catch (err) {
-    console.error(`Failed to push availability to Channex for room type ${roomTypeId}:`, err);
-    await logSync(pool, {
-      channel: 'channex', direction: 'outbound_inventory', room_type_id: roomTypeId,
-      date_range_start: dateFrom, date_range_end: dateTo, status: 'failed', error_message: err.message,
-    });
-    return { pushed: false, error: err.message };
+// The actual work of pushing availability to Channex for one room type and date range —
+// computes the real per-date numbers (not one blanket figure), compresses them into the
+// fewest possible segments, and sends them in a single batched call. This is what the
+// queue in services/channex-queue.js calls once its debounce window closes; application
+// code should call scheduleRoomTypeAvailability below instead of this directly.
+async function pushAvailabilityNow(roomTypeId, dateFrom, dateTo) {
+  const { rows: typeRows } = await pool.query(
+    `SELECT channex_room_type_id FROM room_types WHERE id = $1`,
+    [roomTypeId]
+  );
+  if (!typeRows.length || !typeRows[0].channex_room_type_id) {
+    return { skipped: true, reason: 'Room type is not mapped to Channex' };
   }
+  const propertyId = await getChannexPropertyId(pool);
+  if (!propertyId) return { skipped: true, reason: 'channex_property_id is not set in settings' };
+
+  const daily = await ariCalculator.computeDailyAvailability(roomTypeId, dateFrom, dateTo);
+  const segments = ariCalculator.compressToSegments(daily, ['availability']);
+  await channex.pushAvailability(propertyId, typeRows[0].channex_room_type_id, segments);
+
+  await logSync(pool, {
+    channel: 'channex', direction: 'outbound_inventory', room_type_id: roomTypeId,
+    date_range_start: dateFrom, date_range_end: dateTo,
+    payload_summary: `Pushed availability in ${segments.length} segment(s)`, status: 'success',
+  });
+  return { pushed: true, segments: segments.length };
 }
 
-module.exports = { processBookingFeed, processRevision, syncRoomTypeAvailability, normalizeChannelName, getChannexPropertyId };
+// Same idea for rate and restrictions, reusing the exact resolver "A" built for guest
+// quotes — a price pushed to Booking.com can never silently disagree with what a guest
+// would be quoted in the app.
+async function pushRatesNow(roomTypeId, dateFrom, dateTo) {
+  const { rows: typeRows } = await pool.query(
+    `SELECT channex_rate_plan_id FROM room_types WHERE id = $1`,
+    [roomTypeId]
+  );
+  if (!typeRows.length || !typeRows[0].channex_rate_plan_id) {
+    return { skipped: true, reason: 'Room type has no mapped Channex rate plan' };
+  }
+  const propertyId = await getChannexPropertyId(pool);
+  if (!propertyId) return { skipped: true, reason: 'channex_property_id is not set in settings' };
+
+  const daily = await ariCalculator.computeDailyRates(roomTypeId, dateFrom, dateTo);
+  const segments = ariCalculator.compressToSegments(
+    daily, ['rate', 'min_stay', 'max_stay', 'stop_sell', 'closed_to_arrival', 'closed_to_departure']
+  );
+  await channex.pushRate(propertyId, typeRows[0].channex_rate_plan_id, segments);
+
+  await logSync(pool, {
+    channel: 'channex', direction: 'outbound_inventory', room_type_id: roomTypeId,
+    date_range_start: dateFrom, date_range_end: dateTo,
+    payload_summary: `Pushed rates/restrictions in ${segments.length} segment(s)`, status: 'success',
+  });
+  return { pushed: true, segments: segments.length };
+}
+
+// What the rest of the app actually calls after a check-in, checkout, cancellation, stay
+// change, room visibility toggle, or rate plan change — schedules a debounced, rate-limited,
+// retried push rather than firing immediately. Never throws: a Channex hiccup should never
+// block or fail the PMS action that triggered it, the same treatment as the WhatsApp
+// notifications elsewhere in this codebase.
+function scheduleRoomTypeAvailability(roomTypeId, dateFrom, dateTo) {
+  if (!process.env.CHANNEX_API_KEY) return;
+  channexQueue.scheduleAvailabilitySync(roomTypeId, dateFrom, dateTo, async (from, to) => {
+    try {
+      return await pushAvailabilityNow(roomTypeId, from, to);
+    } catch (err) {
+      await logSync(pool, {
+        channel: 'channex', direction: 'outbound_inventory', room_type_id: roomTypeId,
+        date_range_start: from, date_range_end: to, status: 'failed', error_message: err.message,
+      });
+      throw err;
+    }
+  });
+}
+
+function scheduleRoomTypeRates(roomTypeId, dateFrom, dateTo) {
+  if (!process.env.CHANNEX_API_KEY) return;
+  channexQueue.scheduleRateSync(roomTypeId, dateFrom, dateTo, async (from, to) => {
+    try {
+      return await pushRatesNow(roomTypeId, from, to);
+    } catch (err) {
+      await logSync(pool, {
+        channel: 'channex', direction: 'outbound_inventory', room_type_id: roomTypeId,
+        date_range_start: from, date_range_end: to, status: 'failed', error_message: err.message,
+      });
+      throw err;
+    }
+  });
+}
+
+module.exports = {
+  processBookingFeed, processRevision, normalizeChannelName, getChannexPropertyId,
+  scheduleRoomTypeAvailability, scheduleRoomTypeRates,
+  // exposed for direct/manual use (the "push-availability" route) and tests
+  pushAvailabilityNow, pushRatesNow,
+};

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { requireRole } = require('../middleware/auth');
-const { syncRoomTypeAvailability } = require('../services/channex-sync');
+const { scheduleRoomTypeAvailability } = require('../services/channex-sync');
 
 // GET /api/rooms — full room grid (used by the dashboard and room-assignment tile view)
 // Optional query params: room_type_id, occupancy_status, housekeeping_status
@@ -84,8 +84,7 @@ router.patch('/:id/active', requireRole('manager'), async (req, res) => {
   // best-effort, same treatment as every other Channex sync trigger.
   const syncFrom = new Date().toISOString().slice(0, 10);
   const syncTo = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
-  syncRoomTypeAvailability(rows[0].room_type_id, syncFrom, syncTo)
-    .catch((err) => console.error('Channex availability sync after room active/hide toggle failed:', err));
+  scheduleRoomTypeAvailability(rows[0].room_type_id, syncFrom, syncTo);
 });
 
 // GET /api/rooms/room-types — every category (Deluxe Rooms, Camping Tents, etc.), for the
