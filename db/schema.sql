@@ -133,20 +133,30 @@ CREATE TABLE business_days (
 );
 
 -- Rate plans — multiple rates per room type (standard, weekend, seasonal, corporate, promo).
--- Overlapping plans are resolved by priority (higher wins) at quote time.
+-- Overlapping plans are resolved by priority (higher wins) at quote time. Also carries booking
+-- restrictions (min/max stay, stop sell, closed to arrival/departure) for the same date range —
+-- these two concerns are combined in one row deliberately, since that's how a real OTA/channel
+-- manager connection (Channex included) models them: a single per-date update covering both
+-- price and booking constraints together, not two separate systems.
 CREATE TABLE rate_plans (
-  id            SERIAL PRIMARY KEY,
-  room_type_id  INTEGER NOT NULL REFERENCES room_types(id),
-  name          TEXT NOT NULL,               -- e.g. 'Standard', 'Weekend', 'Summer Season', 'Corporate — Emirates Trading'
-  rate          NUMERIC(10,2) NOT NULL,
-  start_date    DATE,                        -- NULL = no start bound (always active from the beginning)
-  end_date      DATE,                        -- NULL = no end bound (open-ended, e.g. the evergreen 'Standard' plan)
-  days_of_week  INTEGER[],                   -- optional: restrict to specific weekdays, 0=Sunday..6=Saturday; NULL = all days
-  priority      INTEGER NOT NULL DEFAULT 0,  -- higher wins when multiple plans apply to the same night
-  active        BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id                    SERIAL PRIMARY KEY,
+  room_type_id          INTEGER NOT NULL REFERENCES room_types(id),
+  name                  TEXT NOT NULL,        -- e.g. 'Standard', 'Weekend', 'Summer Season', 'Corporate — Emirates Trading'
+  rate                  NUMERIC(10,2),         -- NULL = don't override price, just apply this plan's restrictions
+  start_date            DATE,                  -- NULL = no start bound (always active from the beginning)
+  end_date              DATE,                  -- NULL = no end bound (open-ended, e.g. the evergreen 'Standard' plan)
+  days_of_week          INTEGER[],             -- optional: restrict to specific weekdays, 0=Sunday..6=Saturday; NULL = all days
+  min_stay              INTEGER,               -- NULL = no minimum
+  max_stay              INTEGER,               -- NULL = no maximum
+  stop_sell             BOOLEAN NOT NULL DEFAULT FALSE,
+  closed_to_arrival     BOOLEAN NOT NULL DEFAULT FALSE,   -- guests can stay through this date, just can't check in on it
+  closed_to_departure   BOOLEAN NOT NULL DEFAULT FALSE,   -- guests can stay through this date, just can't check out on it
+  priority              INTEGER NOT NULL DEFAULT 0,  -- higher wins when multiple plans apply to the same night
+  active                BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  CHECK (end_date IS NULL OR start_date IS NULL OR end_date >= start_date)
+  CHECK (end_date IS NULL OR start_date IS NULL OR end_date >= start_date),
+  CHECK (max_stay IS NULL OR min_stay IS NULL OR max_stay >= min_stay)
 );
 
 CREATE INDEX idx_rate_plans_room_type ON rate_plans(room_type_id, active);

@@ -100,6 +100,8 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | List/record leave requests | `GET/POST /api/hr/leave` (manager only) |
 | Approve/reject a leave request | `PATCH /api/hr/leave/:id/approve`, `PATCH /api/hr/leave/:id/reject` (manager only) |
 | List/save/delete letter templates | `GET/POST /api/hr/templates`, `DELETE /api/hr/templates/:id` (manager only) |
+| List/add/edit rate plans | `GET/POST /api/rate-plans?room_type_id=`, `PATCH /api/rate-plans/:id` (add/edit: supervisor+) — now also carries min_stay, max_stay, stop_sell, closed_to_arrival, closed_to_departure alongside rate |
+| Quote a stay (rate + restrictions, per night) | `GET /api/rate-plans/quote?room_type_id=&check_in=&check_out=` |
 | List rooms | `GET /api/rooms?include_inactive=true` — active-only by default; pass `include_inactive` to also see hidden rooms |
 | Add a room | `POST /api/rooms` — `{room_number, room_type_id}` (manager only) |
 | Show/hide a room | `PATCH /api/rooms/:id/active` — `{active: true\|false}` (manager only) — hides from the dashboard without deleting, so history stays intact |
@@ -224,7 +226,17 @@ Three sub-tabs under HR, all manager-only:
 
 All three were tested against the real, unmodified server and a real Postgres database — not a simplified mock — covering the full lifecycle: adding an employee, deactivating and reactivating them, recording a leave request, correctly rejecting an invalid date range before it reaches the server, approving a request and confirming the action buttons disappear afterward, saving a letter as a template, loading it back with the exact title and content, and deleting it. Also reconfirmed the manager-only boundary directly at the backend level (not just checking that the tab is hidden) — a supervisor or receptionist is genuinely blocked from every new endpoint here, the same as the original letter-printing route.
 
-## Not yet built (next phases)
+## Rates & Restrictions — seasonal pricing, minimum stays, date closures
+
+Built specifically to satisfy the foundational requirement of Channex's PMS certification (their docs are explicit: certification verifies "a mechanism that detects ARI changes... a mapping layer... before you run any test" — none of that has anywhere to attach if the underlying feature doesn't exist in the PMS itself yet), but this stands on its own as a real feature regardless of OTA plans: seasonal rates, weekend pricing, minimum-stay rules, and the ability to close specific dates to new bookings, all per room type.
+
+**Design note worth knowing:** rate and restrictions live on the same `rate_plans` row, not two separate systems — deliberately, because that's how Channex's own restrictions API models a per-date update (price and booking constraints together, for one rate plan). A plan can carry only restrictions and no price at all (useful for "close this date" without touching the rate), or a price with no restrictions, or both together.
+
+Resolution rule: for any given night, the single highest-priority matching plan wins completely — its rate *and* all of its restriction fields together, never a mix pulling the rate from one plan and a restriction from a different one. This logic lives in exactly one place (`services/rate-resolver.js`), shared by the nightly quote a guest sees and — once the Channex ARI push is built next — whatever gets sent to Booking.com and Airbnb, so those two can never silently disagree about the price.
+
+New **Rates** tab (manager/supervisor): add a rate plan (name, optional rate, optional date range, optional specific weekdays, min/max stay, stop sell, closed to arrival/departure, priority for overlaps), see all existing plans for a room type, deactivate one without losing its history, and a **Preview** tool that shows the exact resolved rate and restrictions for any date range — the same calculation the system itself uses, so what staff see in the preview is never able to drift from what a guest would actually be quoted.
+
+Tested thoroughly before any of this shipped: 20 targeted unit tests against the shared resolver in isolation (restriction-only plans, overlapping-priority resolution, weekday filtering, date-range boundaries, combined rate+restriction plans) — all passing — plus a full end-to-end pass through the real server, a real Postgres database, and a real browser: adding plans shaped exactly like Channex's own certification test scenarios (a single-date minimum-stay rule, a stop-sell date, a combined rate-plus-restrictions range), confirming an invalid min/max stay combination is rejected both in the browser and, separately, directly at the database level even via a partial update that don't re-check the full row. The migration itself (`rate` becoming nullable, five new columns added) was verified against a database rebuilt to match the real live schema exactly before being trusted.
 
 ## Not yet built (next phases)
 

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { requireRole } = require('../middleware/auth');
+const { resolveRange } = require('../services/rate-resolver');
 
 // GET /api/rate-plans?room_type_id=1 — list plans (all, or filtered to one room type)
 router.get('/', async (req, res) => {
@@ -27,16 +28,30 @@ router.get('/', async (req, res) => {
 // POST /api/rate-plans — create a new rate plan
 // e.g. { room_type_id, name: 'Weekend', rate: 550, days_of_week: [5,6], priority: 10 }
 // e.g. { room_type_id, name: 'Summer Season', rate: 600, start_date, end_date, priority: 5 }
+// e.g. { room_type_id, name: 'Closed for maintenance', stop_sell: true, start_date, end_date }
+//      — rate is optional: a plan can carry only restrictions and no price override.
 router.post('/', requireRole('supervisor'), async (req, res) => {
-  const { room_type_id, name, rate, start_date, end_date, days_of_week, priority } = req.body;
-  if (!room_type_id || !name || rate === undefined) {
-    return res.status(400).json({ error: 'room_type_id, name, and rate are required' });
+  const {
+    room_type_id, name, rate, start_date, end_date, days_of_week, priority,
+    min_stay, max_stay, stop_sell, closed_to_arrival, closed_to_departure,
+  } = req.body;
+  if (!room_type_id || !name) {
+    return res.status(400).json({ error: 'room_type_id and name are required' });
+  }
+  if (min_stay != null && max_stay != null && Number(max_stay) < Number(min_stay)) {
+    return res.status(400).json({ error: 'max_stay cannot be less than min_stay' });
   }
   try {
     const { rows } = await pool.query(
-      `INSERT INTO rate_plans (room_type_id, name, rate, start_date, end_date, days_of_week, priority)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [room_type_id, name, rate, start_date || null, end_date || null, days_of_week || null, priority || 0]
+      `INSERT INTO rate_plans
+        (room_type_id, name, rate, start_date, end_date, days_of_week, priority,
+         min_stay, max_stay, stop_sell, closed_to_arrival, closed_to_departure)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [
+        room_type_id, name, rate ?? null, start_date || null, end_date || null,
+        days_of_week || null, priority || 0, min_stay ?? null, max_stay ?? null,
+        stop_sell || false, closed_to_arrival || false, closed_to_departure || false,
+      ]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -45,10 +60,14 @@ router.post('/', requireRole('supervisor'), async (req, res) => {
   }
 });
 
-// PATCH /api/rate-plans/:id — update rate, dates, priority, or deactivate
+// PATCH /api/rate-plans/:id — update any field, including the restriction fields, or
+// deactivate a plan entirely
 router.patch('/:id', requireRole('supervisor'), async (req, res) => {
   const { id } = req.params;
-  const fields = ['name', 'rate', 'start_date', 'end_date', 'days_of_week', 'priority', 'active'];
+  const fields = [
+    'name', 'rate', 'start_date', 'end_date', 'days_of_week', 'priority', 'active',
+    'min_stay', 'max_stay', 'stop_sell', 'closed_to_arrival', 'closed_to_departure',
+  ];
   const updates = [];
   const values = [];
 
@@ -60,6 +79,12 @@ router.patch('/:id', requireRole('supervisor'), async (req, res) => {
   });
   if (!updates.length) return res.status(400).json({ error: 'No updatable fields provided' });
 
+  const effectiveMinStay = req.body.min_stay !== undefined ? req.body.min_stay : undefined;
+  const effectiveMaxStay = req.body.max_stay !== undefined ? req.body.max_stay : undefined;
+  if (effectiveMinStay != null && effectiveMaxStay != null && Number(effectiveMaxStay) < Number(effectiveMinStay)) {
+    return res.status(400).json({ error: 'max_stay cannot be less than min_stay' });
+  }
+
   values.push(id);
   try {
     const { rows } = await pool.query(
@@ -70,13 +95,16 @@ router.patch('/:id', requireRole('supervisor'), async (req, res) => {
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
+    if (err.code === '23514') return res.status(400).json({ error: 'max_stay cannot be less than min_stay' });
     res.status(500).json({ error: 'Failed to update rate plan' });
   }
 });
 
 // GET /api/rate-plans/quote?room_type_id=1&check_in=2026-08-17&check_out=2026-08-19
-// Resolves the applicable rate for each night of the stay (highest-priority matching plan wins,
-// falling back to the room type's base_rate if nothing matches) and returns a per-night breakdown + total.
+// Resolves the applicable rate AND restrictions for each night of the stay (highest-priority
+// matching plan wins, falling back to the room type's base_rate and no restrictions if nothing
+// matches) and returns a per-night breakdown + total. Uses the same resolver the Channex ARI
+// push uses, so a quote shown to staff can never silently disagree with what gets sent to OTAs.
 router.get('/quote', async (req, res) => {
   const { room_type_id, check_in, check_out } = req.query;
   if (!room_type_id || !check_in || !check_out) {
@@ -93,33 +121,7 @@ router.get('/quote', async (req, res) => {
       [room_type_id]
     );
 
-    const nights = [];
-    let cursor = new Date(check_in);
-    const end = new Date(check_out);
-
-    while (cursor < end) {
-      const dateStr = cursor.toISOString().slice(0, 10);
-      const dow = cursor.getDay(); // 0=Sunday..6=Saturday
-
-      const applicable = plans.filter((p) => {
-        if (p.start_date && dateStr < p.start_date.toISOString().slice(0, 10)) return false;
-        if (p.end_date && dateStr > p.end_date.toISOString().slice(0, 10)) return false;
-        if (p.days_of_week && !p.days_of_week.includes(dow)) return false;
-        return true;
-      });
-
-      applicable.sort((a, b) => b.priority - a.priority || Number(b.rate) - Number(a.rate));
-      const chosen = applicable[0];
-
-      nights.push({
-        date: dateStr,
-        rate: chosen ? Number(chosen.rate) : baseRate,
-        rate_plan: chosen ? chosen.name : 'Standard (base rate)',
-      });
-
-      cursor.setDate(cursor.getDate() + 1);
-    }
-
+    const nights = resolveRange(plans, baseRate, check_in, check_out);
     const total = nights.reduce((sum, n) => sum + n.rate, 0);
 
     res.json({
@@ -137,3 +139,4 @@ router.get('/quote', async (req, res) => {
 });
 
 module.exports = router;
+

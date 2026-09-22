@@ -376,6 +376,7 @@
       <button class="tab-btn hidden" id="tab-reports" data-view="reports">Reports</button>
       <button class="tab-btn hidden" id="tab-night-audit" data-view="night-audit">Night Audit</button>
       <button class="tab-btn hidden" id="tab-hr" data-view="hr">HR</button>
+      <button class="tab-btn hidden" id="tab-rates" data-view="rates">Rates</button>
     </div>
 
     <div id="view-dashboard">
@@ -441,6 +442,7 @@
     <div id="view-reports" class="wrap hidden"></div>
     <div id="view-night-audit" class="wrap hidden"></div>
     <div id="view-hr" class="wrap hidden"></div>
+    <div id="view-rates" class="wrap hidden"></div>
   </div>
 
   <!-- ============ MODAL (check-in / check-out) ============ -->
@@ -530,13 +532,14 @@
     document.getElementById('tab-reports').classList.toggle('hidden', role !== 'manager');
     document.getElementById('tab-night-audit').classList.toggle('hidden', !(role === 'manager' || role === 'supervisor'));
     document.getElementById('tab-hr').classList.toggle('hidden', role !== 'manager');
+    document.getElementById('tab-rates').classList.toggle('hidden', !(role === 'manager' || role === 'supervisor'));
     updateTodayDate();
     startTodayDateAutoRefresh();
     switchView('dashboard');
   }
 
   // -------- Tab navigation --------
-  const VIEWS = ['dashboard', 'reservations', 'inventory', 'expenses', 'cashbook', 'reports', 'night-audit', 'hr'];
+  const VIEWS = ['dashboard', 'reservations', 'inventory', 'expenses', 'cashbook', 'reports', 'night-audit', 'hr', 'rates'];
   function switchView(name) {
     VIEWS.forEach((v) => {
       document.getElementById(`view-${v}`).classList.toggle('hidden', v !== name);
@@ -552,6 +555,7 @@
     else if (name === 'reports') loadReportsView();
     else if (name === 'night-audit') loadNightAuditView();
     else if (name === 'hr') loadHRView();
+    else if (name === 'rates') loadRatesView();
   }
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
@@ -2853,6 +2857,210 @@
       });
     } catch (err) {
       panel.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load.')}</div>`;
+    }
+  }
+
+  // -------- Rates & Restrictions (manager/supervisor) --------
+  async function loadRatesView(selectedRoomTypeId) {
+    const container = document.getElementById('view-rates');
+    container.innerHTML = `<div class="loading">Loading room types…</div>`;
+    try {
+      const roomTypes = await apiFetch('/api/rooms/room-types');
+      if (!roomTypes.length) {
+        container.innerHTML = `<div class="page-head"><h1>Rates</h1></div><p style="color:var(--ink-soft);">Add a room category first, in Manage Rooms.</p>`;
+        return;
+      }
+      const roomTypeId = selectedRoomTypeId || roomTypes[0].id;
+
+      container.innerHTML = `
+        <div class="page-head"><h1>Rates &amp; Restrictions</h1><p>Seasonal pricing, minimum stays, and date closures — per room category.</p></div>
+        <div class="field" style="max-width:320px;">
+          <label>Room category</label>
+          <select id="rp-room-type">${roomTypes.map((rt) => `<option value="${rt.id}" ${rt.id === Number(roomTypeId) ? 'selected' : ''}>${escapeHtml(rt.name)} (base AED ${Number(rt.base_rate).toFixed(0)}/night)</option>`).join('')}</select>
+        </div>
+
+        <p class="section-title" style="margin-top:22px;">Add a Rate Plan</p>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 12px;">
+          Leave rate blank to apply restrictions only, without changing the price. Leave dates blank for an always-on plan. When plans overlap on the same night, the higher priority number wins — entirely, not mixed with a lower one.
+        </p>
+        <div class="field-row">
+          <div class="field required"><label>Name</label><input type="text" id="rp-name" placeholder="e.g. Summer Season, Weekend, Closed for maintenance"></div>
+          <div class="field"><label>Rate (AED/night, optional)</label><input type="number" id="rp-rate" min="0" step="0.01"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Start date (optional)</label><input type="date" id="rp-start"></div>
+          <div class="field"><label>End date (optional)</label><input type="date" id="rp-end"></div>
+        </div>
+        <div class="field">
+          <label>Days of week (leave all unchecked for every day)</label>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+            ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => `
+              <label style="font-size:13px; display:flex; align-items:center; gap:4px;"><input type="checkbox" class="rp-dow" value="${i}"> ${d}</label>
+            `).join('')}
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Min stay (nights, optional)</label><input type="number" id="rp-min-stay" min="1"></div>
+          <div class="field"><label>Max stay (nights, optional)</label><input type="number" id="rp-max-stay" min="1"></div>
+          <div class="field"><label>Priority</label><input type="number" id="rp-priority" value="0"></div>
+        </div>
+        <div style="display:flex; gap:16px; margin:6px 0 14px;">
+          <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="rp-stop-sell"> Stop sell (close to new bookings)</label>
+          <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="rp-cta"> Closed to arrival</label>
+          <label style="font-size:13px; display:flex; align-items:center; gap:5px;"><input type="checkbox" id="rp-ctd"> Closed to departure</label>
+        </div>
+        <div id="rp-add-error" class="modal-error hidden"></div>
+        <button class="btn btn-primary" id="rp-add-btn">Add Rate Plan</button>
+
+        <p class="section-title" style="margin-top:26px;">Existing Plans</p>
+        <div id="rp-list"><div class="loading">Loading…</div></div>
+
+        <p class="section-title" style="margin-top:26px;">Preview a Date Range</p>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 10px;">See exactly what rate and restrictions would apply, night by night — the same calculation used for quoting a stay.</p>
+        <div class="field-row">
+          <div class="field"><label>From</label><input type="date" id="rp-preview-start"></div>
+          <div class="field"><label>To</label><input type="date" id="rp-preview-end"></div>
+          <button class="btn btn-ghost" id="rp-preview-btn" style="height:38px; align-self:flex-end;">Preview</button>
+        </div>
+        <div id="rp-preview-result"></div>
+      `;
+
+      document.getElementById('rp-room-type').addEventListener('change', (e) => loadRatesView(e.target.value));
+
+      await refreshRatePlanList(roomTypeId);
+
+      document.getElementById('rp-add-btn').addEventListener('click', async () => {
+        const errorBox = document.getElementById('rp-add-error');
+        errorBox.classList.add('hidden');
+        const name = document.getElementById('rp-name').value.trim();
+        if (!name) { errorBox.textContent = 'Name is required.'; errorBox.classList.remove('hidden'); return; }
+
+        const rateVal = document.getElementById('rp-rate').value;
+        const minStayVal = document.getElementById('rp-min-stay').value;
+        const maxStayVal = document.getElementById('rp-max-stay').value;
+        const dow = Array.from(document.querySelectorAll('.rp-dow:checked')).map((el) => Number(el.value));
+
+        if (minStayVal && maxStayVal && Number(maxStayVal) < Number(minStayVal)) {
+          errorBox.textContent = 'Max stay cannot be less than min stay.';
+          errorBox.classList.remove('hidden');
+          return;
+        }
+
+        try {
+          await apiFetch('/api/rate-plans', {
+            method: 'POST',
+            body: JSON.stringify({
+              room_type_id: roomTypeId,
+              name,
+              rate: rateVal ? Number(rateVal) : undefined,
+              start_date: document.getElementById('rp-start').value || undefined,
+              end_date: document.getElementById('rp-end').value || undefined,
+              days_of_week: dow.length ? dow : undefined,
+              min_stay: minStayVal ? Number(minStayVal) : undefined,
+              max_stay: maxStayVal ? Number(maxStayVal) : undefined,
+              priority: Number(document.getElementById('rp-priority').value) || 0,
+              stop_sell: document.getElementById('rp-stop-sell').checked,
+              closed_to_arrival: document.getElementById('rp-cta').checked,
+              closed_to_departure: document.getElementById('rp-ctd').checked,
+            }),
+          });
+          await loadRatesView(roomTypeId);
+        } catch (err) {
+          errorBox.textContent = err.message || 'Failed to add rate plan.';
+          errorBox.classList.remove('hidden');
+        }
+      });
+
+      document.getElementById('rp-preview-btn').addEventListener('click', async () => {
+        const resultBox = document.getElementById('rp-preview-result');
+        const start = document.getElementById('rp-preview-start').value;
+        const end = document.getElementById('rp-preview-end').value;
+        if (!start || !end) { resultBox.innerHTML = `<p class="modal-error" style="margin-top:8px;">Pick both dates.</p>`; return; }
+        resultBox.innerHTML = `<div class="loading">Calculating…</div>`;
+        try {
+          const quote = await apiFetch(`/api/rate-plans/quote?room_type_id=${roomTypeId}&check_in=${start}&check_out=${end}`);
+          resultBox.innerHTML = `
+            <table class="data-table" style="margin-top:10px;">
+              <thead><tr><th>Date</th><th>Rate</th><th>Plan</th><th>Min/Max Stay</th><th>Restrictions</th></tr></thead>
+              <tbody>
+                ${quote.nights.map((n) => {
+                  const restrictions = [
+                    n.stop_sell ? 'Stop sell' : null,
+                    n.closed_to_arrival ? 'Closed to arrival' : null,
+                    n.closed_to_departure ? 'Closed to departure' : null,
+                  ].filter(Boolean).join(', ') || '—';
+                  return `
+                  <tr>
+                    <td>${new Date(n.date).toLocaleDateString(undefined, { timeZone: 'UTC' })}</td>
+                    <td>AED ${n.rate.toFixed(2)}</td>
+                    <td>${escapeHtml(n.rate_plan)}</td>
+                    <td>${n.min_stay || '—'} / ${n.max_stay || '—'}</td>
+                    <td style="color:${restrictions === '—' ? 'var(--ink-soft)' : 'var(--red)'};">${restrictions}</td>
+                  </tr>
+                `;
+                }).join('')}
+              </tbody>
+            </table>
+            <p style="font-size:13px; margin-top:8px;">Total: AED ${quote.total.toFixed(2)} · Average AED ${quote.average_nightly_rate.toFixed(2)}/night</p>
+          `;
+        } catch (err) {
+          resultBox.innerHTML = `<p class="modal-error" style="margin-top:8px;">${escapeHtml(err.message || 'Failed to preview.')}</p>`;
+        }
+      });
+    } catch (err) {
+      container.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load.')}</div>`;
+    }
+  }
+
+  async function refreshRatePlanList(roomTypeId) {
+    const listBox = document.getElementById('rp-list');
+    try {
+      const plans = await apiFetch(`/api/rate-plans?room_type_id=${roomTypeId}`);
+      listBox.innerHTML = `
+        <table class="data-table">
+          <thead><tr><th>Name</th><th>Rate</th><th>Dates</th><th>Restrictions</th><th>Priority</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${plans.map((p) => {
+              const dates = p.start_date || p.end_date
+                ? `${p.start_date ? new Date(p.start_date).toLocaleDateString(undefined, { timeZone: 'UTC' }) : '…'} – ${p.end_date ? new Date(p.end_date).toLocaleDateString(undefined, { timeZone: 'UTC' }) : '…'}`
+                : 'Always';
+              const restrictions = [
+                p.min_stay ? `Min ${p.min_stay}n` : null,
+                p.max_stay ? `Max ${p.max_stay}n` : null,
+                p.stop_sell ? 'Stop sell' : null,
+                p.closed_to_arrival ? 'CTA' : null,
+                p.closed_to_departure ? 'CTD' : null,
+              ].filter(Boolean).join(', ') || '—';
+              return `
+                <tr>
+                  <td>${escapeHtml(p.name)}</td>
+                  <td>${p.rate !== null ? `AED ${Number(p.rate).toFixed(2)}` : '—'}</td>
+                  <td>${dates}</td>
+                  <td>${restrictions}</td>
+                  <td>${p.priority}</td>
+                  <td style="color:${p.active ? 'var(--moss)' : 'var(--ink-soft)'};">${p.active ? 'Active' : 'Inactive'}</td>
+                  <td><button type="button" class="btn btn-ghost" style="font-size:12px; padding:4px 10px;" data-toggle-plan="${p.id}" data-currently-active="${p.active}">${p.active ? 'Deactivate' : 'Reactivate'}</button></td>
+                </tr>
+              `;
+            }).join('') || '<tr><td colspan="7" style="text-align:center; color:var(--ink-soft);">No rate plans yet — the base rate applies to every night.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+      document.querySelectorAll('[data-toggle-plan]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const currentlyActive = btn.dataset.currentlyActive === 'true';
+          try {
+            await apiFetch(`/api/rate-plans/${btn.dataset.togglePlan}`, {
+              method: 'PATCH', body: JSON.stringify({ active: !currentlyActive }),
+            });
+            await refreshRatePlanList(roomTypeId);
+          } catch (err) {
+            alert(err.message || 'Failed to update rate plan.');
+          }
+        });
+      });
+    } catch (err) {
+      listBox.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load rate plans.')}</div>`;
     }
   }
 
