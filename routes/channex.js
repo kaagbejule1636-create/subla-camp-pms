@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { processBookingFeed, syncRoomTypeAvailability } = require('../services/channex-sync');
+const { processBookingFeed, pushAvailabilityNow, pushRatesNow } = require('../services/channex-sync');
 
 // Channex signs its webhook calls with whatever secret you configure for the webhook in
 // their dashboard, sent back as this header — same shared-secret pattern as the generic
@@ -45,8 +45,11 @@ router.post('/sync-now', requireAuth, requireRole('manager'), async (req, res) =
 });
 
 // POST /api/channex/push-availability — manager-only manual trigger to push current
-// availability/rate for every mapped room type over a date range, mainly for the first
-// sync after mapping a room type, or to force a resync if something seems out of step.
+// availability, rates, and restrictions for every mapped room type over a date range,
+// mainly for the first sync after mapping a room type, or to force a resync if something
+// seems out of step. Calls straight through to the actual push (bypassing the normal
+// debounce queue), since this is an explicit "do it now and tell me what happened" action,
+// not a background reaction to a PMS event.
 router.post('/push-availability', requireAuth, requireRole('manager'), async (req, res) => {
   const { start, end } = req.body;
   if (!start || !end) return res.status(400).json({ error: 'start and end are required' });
@@ -57,8 +60,9 @@ router.post('/push-availability', requireAuth, requireRole('manager'), async (re
     );
     const results = [];
     for (const type of mappedTypes) {
-      const result = await syncRoomTypeAvailability(type.id, start, end);
-      results.push({ room_type: type.name, ...result });
+      const availabilityResult = await pushAvailabilityNow(type.id, start, end);
+      const rateResult = await pushRatesNow(type.id, start, end);
+      results.push({ room_type: type.name, availability: availabilityResult, rates: rateResult });
     }
     res.json({ room_types_synced: results.length, results });
   } catch (err) {
