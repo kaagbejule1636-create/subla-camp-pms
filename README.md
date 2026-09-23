@@ -254,7 +254,11 @@ This replaces the flat-number availability push built earlier with what Channex'
 
 **Two real bugs were caught by this testing, not shipped silently:** the range-merging scenario above initially looked broken in a test — turned out to be a test-isolation artifact (an earlier test in the same run had already consumed the shared rate limiter's capacity), confirmed by reproducing the exact scenario in isolation before concluding the code itself was fine. The second was real: a rate plan spanning a single day (start date equal to end date) produced zero output — rate plan dates are inclusive on both ends, but the date-range machinery everywhere else in the app treats the end date as exclusive, the same convention a reservation's checkout date already uses. Fixed by converting between the two conventions at the one place they meet, and reverified against both a single-day plan and a multi-day one to confirm neither direction now has an off-by-one.
 
-## Not yet built (next phases)
+## Sync Log — a real screen, not just a raw API endpoint
+
+The audit trail (`ota_sync_log`) existed from early on, but the only way to see it was hitting the API URL directly and reading raw JSON — not something to point someone at for routine checking. There's now a **Sync Log** section inside **Manage Rooms → Channex Integration**: every push to Channex and every booking received from it, newest first, with a plain-English direction label instead of the raw `inbound_booking`/`outbound_inventory` values, and a failed entry shows its actual error message inline rather than just a red "failed" with no explanation. A note in the UI itself explains that a push doesn't appear the instant an action happens — it's batched a few seconds later on purpose.
+
+Tested against real seeded data covering a successful push, a successful inbound booking, and a failure with a real error message, confirming each renders correctly (including the failure's error text actually showing up, not just its status) — and separately tested the empty state a brand-new property would actually see, so the first thing anyone finds there isn't a confusing blank table.
 
 ## Not yet built (next phases)
 

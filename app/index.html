@@ -2359,6 +2359,34 @@
     await refreshManageRoomsBody();
   }
 
+  async function refreshSyncLog() {
+    const body = document.getElementById('mr-synclog-body');
+    if (!body) return; // modal may have been closed before this resolves
+    body.innerHTML = `<div class="loading">Loading…</div>`;
+    try {
+      const entries = await apiFetch('/api/ota/sync-log?limit=30');
+      const directionLabel = { inbound_booking: 'Booking received', outbound_inventory: 'Pushed out' };
+      body.innerHTML = entries.length ? `
+        <table class="data-table">
+          <thead><tr><th>When</th><th>Channel</th><th>Direction</th><th>Summary</th><th>Status</th></tr></thead>
+          <tbody>
+            ${entries.map((e) => `
+              <tr>
+                <td style="white-space:nowrap;">${new Date(e.created_at).toLocaleString()}</td>
+                <td>${escapeHtml(e.channel)}</td>
+                <td>${directionLabel[e.direction] || escapeHtml(e.direction)}</td>
+                <td>${escapeHtml(e.payload_summary || '—')}${e.status === 'failed' && e.error_message ? `<br><span style="color:var(--red); font-size:12px;">${escapeHtml(e.error_message)}</span>` : ''}</td>
+                <td style="color:${e.status === 'success' ? 'var(--moss)' : 'var(--red)'};">${escapeHtml(e.status)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : `<p style="color:var(--ink-soft); font-size:13px;">Nothing logged yet — once a booking arrives or a sync happens, it'll show up here.</p>`;
+    } catch (err) {
+      body.innerHTML = `<div class="error-box">${escapeHtml(err.message || 'Failed to load sync log.')}</div>`;
+    }
+  }
+
   async function refreshManageRoomsBody() {
     try {
       const [allRooms, roomTypes, channexProperty] = await Promise.all([
@@ -2430,9 +2458,22 @@
           </tbody>
         </table>
         <div id="mr-mapping-error" class="modal-error hidden" style="margin-top:10px;"></div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:22px;">
+          <p class="section-title" style="margin-bottom:0;">Sync Log</p>
+          <button type="button" class="btn btn-ghost" id="mr-synclog-refresh" style="font-size:12.5px; padding:6px 12px;">Refresh</button>
+        </div>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 10px;">
+          Every push to Channex, and every booking received from it — most recent first. A push
+          doesn't appear instantly after checking a guest in or changing a rate; it's batched a
+          few seconds later on purpose, so several quick changes send as one update, not many.
+        </p>
+        <div id="mr-synclog-body"><div class="loading">Loading…</div></div>
       `);
 
       document.getElementById('mr-close').addEventListener('click', closeModal);
+      document.getElementById('mr-synclog-refresh').addEventListener('click', refreshSyncLog);
+      refreshSyncLog();
 
       document.getElementById('mr-add-room-btn').addEventListener('click', async () => {
         const errorBox = document.getElementById('mr-room-error');
