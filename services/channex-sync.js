@@ -316,9 +316,69 @@ function scheduleRoomTypeRates(roomTypeId, dateFrom, dateTo) {
   });
 }
 
+// Full Sync — the very first sync after going live, or a full resync if something ever
+// seems out of step. Channex's own certification requirement is 2 API calls total, not 2
+// per room type: every mapped room type's data for the next FULL_SYNC_DAYS days is
+// combined into one availability call and one rate/restrictions call, since each segment
+// already carries its own room type or rate plan ID. Bypasses the debounce queue entirely
+// — a Full Sync is a rare, deliberate, explicit action where the person doing it wants to
+// see the real result immediately, not "check back in a few seconds."
+const FULL_SYNC_DAYS = 500;
+
+async function fullSyncNow() {
+  if (!process.env.CHANNEX_API_KEY) return { skipped: true, reason: 'Channex not configured' };
+  const propertyId = await getChannexPropertyId(pool);
+  if (!propertyId) return { skipped: true, reason: 'channex_property_id is not set in settings' };
+
+  const { rows: mappedTypes } = await pool.query(
+    `SELECT id, name, channex_room_type_id, channex_rate_plan_id FROM room_types WHERE channex_room_type_id IS NOT NULL`
+  );
+  if (!mappedTypes.length) return { skipped: true, reason: 'No room types are mapped to Channex yet' };
+
+  const dateFrom = new Date().toISOString().slice(0, 10);
+  const dateTo = new Date(Date.now() + FULL_SYNC_DAYS * 86400000).toISOString().slice(0, 10);
+
+  const allAvailabilitySegments = [];
+  const allRateSegments = [];
+  const perRoomType = [];
+
+  for (const type of mappedTypes) {
+    const dailyAvailability = await ariCalculator.computeDailyAvailability(type.id, dateFrom, dateTo);
+    const availabilitySegments = ariCalculator.compressToSegments(dailyAvailability, ['availability']);
+    availabilitySegments.forEach((s) => allAvailabilitySegments.push({ ...s, room_type_id: type.channex_room_type_id }));
+
+    let rateSegmentCount = 0;
+    if (type.channex_rate_plan_id) {
+      const dailyRates = await ariCalculator.computeDailyRates(type.id, dateFrom, dateTo);
+      const rateSegments = ariCalculator.compressToSegments(
+        dailyRates, ['rate', 'min_stay', 'max_stay', 'stop_sell', 'closed_to_arrival', 'closed_to_departure']
+      );
+      rateSegments.forEach((s) => allRateSegments.push({ ...s, rate_plan_id: type.channex_rate_plan_id }));
+      rateSegmentCount = rateSegments.length;
+    }
+
+    perRoomType.push({ room_type: type.name, availability_segments: availabilitySegments.length, rate_segments: rateSegmentCount });
+  }
+
+  await channex.pushAvailabilityBatch(propertyId, allAvailabilitySegments);
+  await channex.pushRateBatch(propertyId, allRateSegments);
+
+  await logSync(pool, {
+    channel: 'channex', direction: 'outbound_inventory', date_range_start: dateFrom, date_range_end: dateTo,
+    payload_summary: `Full sync: ${mappedTypes.length} room type(s), ${allAvailabilitySegments.length} availability segment(s) + ${allRateSegments.length} rate segment(s), in 2 API calls`,
+    status: 'success',
+  });
+
+  return {
+    api_calls: 2, room_types_synced: mappedTypes.length, date_from: dateFrom, date_to: dateTo,
+    total_availability_segments: allAvailabilitySegments.length, total_rate_segments: allRateSegments.length,
+    per_room_type: perRoomType,
+  };
+}
+
 module.exports = {
   processBookingFeed, processRevision, normalizeChannelName, getChannexPropertyId,
-  scheduleRoomTypeAvailability, scheduleRoomTypeRates,
+  scheduleRoomTypeAvailability, scheduleRoomTypeRates, fullSyncNow,
   // exposed for direct/manual use (the "push-availability" route) and tests
   pushAvailabilityNow, pushRatesNow,
 };

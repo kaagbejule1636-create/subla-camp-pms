@@ -92,6 +92,7 @@ Three roles, matching the eZee permission model: **receptionist** (reservations,
 | Channex webhook (bookings arriving) | `POST /api/channex/webhook` — protected by `CHANNEX_WEBHOOK_SECRET`, not staff login |
 | Manually trigger a Channex feed check | `POST /api/channex/sync-now` (manager only) — mainly for testing the connection |
 | Manually push availability/rates to Channex | `POST /api/channex/push-availability` — `{start, end}` (manager only) |
+| Full Sync (500 days, 2 calls) | `POST /api/channex/full-sync` (manager only) — every mapped room type at once, combined into exactly 2 API calls |
 | View/set the Channex property ID | `GET/PUT /api/settings/channex-property-id` (view: any logged-in user, set: manager only) |
 | Map a room type to Channex | `PATCH /api/rooms/room-types/:id/channex-mapping` — `{channex_room_type_id, channex_rate_plan_id}` (manager only) |
 | Print a letter on letterhead | `POST /api/hr/letter/print` — `{title, content}` (manager only) |
@@ -259,6 +260,18 @@ This replaces the flat-number availability push built earlier with what Channex'
 The audit trail (`ota_sync_log`) existed from early on, but the only way to see it was hitting the API URL directly and reading raw JSON — not something to point someone at for routine checking. There's now a **Sync Log** section inside **Manage Rooms → Channex Integration**: every push to Channex and every booking received from it, newest first, with a plain-English direction label instead of the raw `inbound_booking`/`outbound_inventory` values, and a failed entry shows its actual error message inline rather than just a red "failed" with no explanation. A note in the UI itself explains that a push doesn't appear the instant an action happens — it's batched a few seconds later on purpose.
 
 Tested against real seeded data covering a successful push, a successful inbound booking, and a failure with a real error message, confirming each renders correctly (including the failure's error text actually showing up, not just its status) — and separately tested the empty state a brand-new property would actually see, so the first thing anyone finds there isn't a confusing blank table.
+
+## Full Sync — the last piece of Channex certification's Test 1
+
+A new **"Full Sync (next 500 days)"** button in Manage Rooms → Channex Integration: sends every mapped room type's real availability and rates/restrictions for the next 500 days, combined into **exactly 2 API calls** — Channex's own stated requirement for a full sync, and worth being precise about: 2 calls total, not 2 per room type. Every segment already carries its own room type or rate plan ID, so multiple room types genuinely ride together in the same call rather than each needing their own pair — built this way deliberately, even with only one room type mapped right now, so it's still correct the day a second one is added, not something that needs revisiting later.
+
+Built as entirely new, additive functions (`pushAvailabilityBatch`, `pushRateBatch`, `fullSyncNow`) rather than changing anything the day-to-day triggers (check-in, checkout, a rate change) already rely on — zero risk of regressing something that was already tested and working.
+
+**Verified with genuinely scattered data, not a trivial case:** two bookings months apart and a seasonal rate plan in between, spanning the full 500-day window. The result: exactly 2 API calls, 5 availability segments and 3 rate segments — and every single date boundary and value in both was checked by hand against what the scattered bookings and rate plan should actually produce. All correct: the exact nights each booking reduced availability, the exact window the seasonal rate applied, and the base rate correctly resuming on both sides of it. Also tested through the real browser — the button, its confirmation prompt, and the result message all working end to end, not just the API in isolation.
+
+**One real bug caught and fixed before it shipped:** an escaped apostrophe in the confirmation dialog's text was written incorrectly, doubling the backslash and breaking the file's JavaScript entirely. Caught by the same syntax check that runs before anything is ever sent over, not left for a live deploy to surface.
+
+## Not yet built (next phases)
 
 ## Not yet built (next phases)
 

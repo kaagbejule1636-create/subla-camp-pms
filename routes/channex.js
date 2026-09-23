@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { processBookingFeed, pushAvailabilityNow, pushRatesNow } = require('../services/channex-sync');
+const { processBookingFeed, pushAvailabilityNow, pushRatesNow, fullSyncNow } = require('../services/channex-sync');
 
 // Channex signs its webhook calls with whatever secret you configure for the webhook in
 // their dashboard, sent back as this header — same shared-secret pattern as the generic
@@ -68,6 +68,21 @@ router.post('/push-availability', requireAuth, requireRole('manager'), async (re
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || 'Failed to push availability to Channex' });
+  }
+});
+
+// POST /api/channex/full-sync — manager-only manual trigger. Pushes every mapped room
+// type's real availability and rates/restrictions for the next 500 days, combined into
+// exactly 2 API calls (Channex's own certification requirement for a full sync) — used
+// for the very first sync after mapping a property, or to force a complete resync if
+// anything ever seems out of step.
+router.post('/full-sync', requireAuth, requireRole('manager'), async (req, res) => {
+  try {
+    const result = await fullSyncNow();
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Failed to run full sync' });
   }
 });
 

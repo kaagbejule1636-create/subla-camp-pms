@@ -2459,6 +2459,16 @@
         </table>
         <div id="mr-mapping-error" class="modal-error hidden" style="margin-top:10px;"></div>
 
+        <div style="margin-top:22px;">
+          <button type="button" class="btn btn-primary" id="mr-full-sync-btn">Full Sync (next 500 days)</button>
+          <p style="font-size:12px; color:var(--ink-soft); margin:6px 0 0;">
+            Sends every mapped room type's real availability and rates for the next 500 days to Channex,
+            in exactly 2 API calls — for the very first sync, or to force a complete resync if anything seems off.
+          </p>
+          <div id="mr-full-sync-error" class="modal-error hidden" style="margin-top:8px;"></div>
+          <div id="mr-full-sync-result" style="margin-top:8px;"></div>
+        </div>
+
         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:22px;">
           <p class="section-title" style="margin-bottom:0;">Sync Log</p>
           <button type="button" class="btn btn-ghost" id="mr-synclog-refresh" style="font-size:12.5px; padding:6px 12px;">Refresh</button>
@@ -2474,6 +2484,39 @@
       document.getElementById('mr-close').addEventListener('click', closeModal);
       document.getElementById('mr-synclog-refresh').addEventListener('click', refreshSyncLog);
       refreshSyncLog();
+
+      document.getElementById('mr-full-sync-btn').addEventListener('click', async () => {
+        const errorBox = document.getElementById('mr-full-sync-error');
+        const resultBox = document.getElementById('mr-full-sync-result');
+        const btn = document.getElementById('mr-full-sync-btn');
+        errorBox.classList.add('hidden');
+        resultBox.innerHTML = '';
+        if (!confirm('Send every mapped room type\'s availability and rates for the next 500 days to Channex? This is meant for the first sync, or a full resync, not routine use.')) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Syncing…';
+        try {
+          const result = await apiFetch('/api/channex/full-sync', { method: 'POST' });
+          if (result.skipped) {
+            resultBox.innerHTML = `<p style="font-size:13px; color:var(--ink-soft);">Skipped: ${escapeHtml(result.reason)}</p>`;
+          } else {
+            resultBox.innerHTML = `
+              <p style="font-size:13px; color:var(--moss);">
+                Done — ${result.room_types_synced} room type(s) synced in ${result.api_calls} API calls
+                (${result.total_availability_segments} availability segment(s), ${result.total_rate_segments} rate segment(s)),
+                covering ${new Date(result.date_from).toLocaleDateString()} through ${new Date(result.date_to).toLocaleDateString()}.
+              </p>
+            `;
+          }
+          await refreshSyncLog();
+        } catch (err) {
+          errorBox.textContent = err.message || 'Full sync failed.';
+          errorBox.classList.remove('hidden');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Full Sync (next 500 days)';
+        }
+      });
 
       document.getElementById('mr-add-room-btn').addEventListener('click', async () => {
         const errorBox = document.getElementById('mr-room-error');

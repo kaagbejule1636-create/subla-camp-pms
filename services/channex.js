@@ -122,4 +122,48 @@ module.exports = {
   acknowledgeBookingRevision,
   pushAvailability,
   pushRate,
+  pushAvailabilityBatch,
+  pushRateBatch,
 };
+
+// Same underlying call as pushAvailability, but for a Full Sync spanning every mapped
+// room type at once — Channex's own certification requirement is 2 API calls total for a
+// full sync, not 2 per room type, and their /availability endpoint already supports this:
+// each segment carries its own room_type_id, so many room types' data can ride in one
+// request. Deliberately a separate function from pushAvailability rather than a change to
+// it — the single-room-type version is already tested and used by every day-to-day
+// trigger (check-in, checkout, a rate change); this only ever gets called by an explicit
+// Full Sync action.
+async function pushAvailabilityBatch(propertyId, segments) {
+  if (!segments.length) return null;
+  return channexRequest('POST', '/availability', {
+    values: segments.map((s) => ({
+      property_id: propertyId,
+      room_type_id: s.room_type_id,
+      date_from: s.date_from,
+      date_to: s.date_to,
+      availability: s.availability,
+    })),
+  });
+}
+
+async function pushRateBatch(propertyId, segments) {
+  if (!segments.length) return null;
+  return channexRequest('POST', '/restrictions', {
+    values: segments.map((s) => {
+      const value = {
+        property_id: propertyId,
+        rate_plan_id: s.rate_plan_id,
+        date_from: s.date_from,
+        date_to: s.date_to,
+      };
+      if (s.rate !== undefined && s.rate !== null) value.rate = Number(s.rate).toFixed(2);
+      if (s.min_stay !== undefined && s.min_stay !== null) value.min_stay = s.min_stay;
+      if (s.max_stay !== undefined && s.max_stay !== null) value.max_stay = s.max_stay;
+      if (s.stop_sell !== undefined) value.stop_sell = s.stop_sell;
+      if (s.closed_to_arrival !== undefined) value.closed_to_arrival = s.closed_to_arrival;
+      if (s.closed_to_departure !== undefined) value.closed_to_departure = s.closed_to_departure;
+      return value;
+    }),
+  });
+}
